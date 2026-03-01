@@ -9,7 +9,7 @@ class TrainingEntrySerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
 
     def validate_weight(self, value):
-        if value <= 0:
+        if value < 0:
             raise serializers.ValidationError("Weight must be a positive number.")
         return value
 

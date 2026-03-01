@@ -5,10 +5,10 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
     date: new Date().toISOString().split('T')[0],
     exercise_type: 'squat',
     exercise_name: 'Squat',
-    weight: '',
-    sets: '',
-    reps: '',
-    rpe: '',
+    weight: '0',
+    sets: '1',
+    reps: '1',
+    rpe: '5',
     notes: ''
   });
 
@@ -46,8 +46,8 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
     setError('');
 
     // Validation
-    if (!formData.weight || parseFloat(formData.weight) <= 0) {
-      setError('Weight must be a positive number');
+    if (formData.weight === '' || parseFloat(formData.weight) < 0) {
+      setError('Weight must be 0 or greater');
       return;
     }
     if (!formData.sets || parseInt(formData.sets) < 1) {
@@ -95,10 +95,10 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
         date: new Date().toISOString().split('T')[0],
         exercise_type: 'squat',
         exercise_name: 'Squat',
-        weight: '',
-        sets: '',
-        reps: '',
-        rpe: '',
+        weight: '0',
+        sets: '1',
+        reps: '1',
+        rpe: '5',
         notes: ''
       });
 
