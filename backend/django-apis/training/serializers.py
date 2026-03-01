@@ -5,7 +5,7 @@ from .models import TrainingEntry
 class TrainingEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = TrainingEntry
-        fields = ['id', 'date', 'exercise_type', 'exercise_name', 'weight', 'sets', 'reps', 'rpe', 'notes', 'created_at']
+        fields = ['id', 'date', 'exercise_type', 'exercise_name', 'weight', 'weight_unit', 'sets', 'reps', 'rpe', 'notes', 'created_at']
         read_only_fields = ['id', 'created_at']
 
     def validate_weight(self, value):

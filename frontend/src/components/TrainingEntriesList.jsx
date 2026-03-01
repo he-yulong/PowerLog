@@ -44,6 +44,7 @@ const TrainingEntriesList = ({ refresh }) => {
       exercise_type: entry.exercise_type,
       exercise_name: entry.exercise_name,
       weight: entry.weight,
+      weight_unit: entry.weight_unit || 'kg',
       sets: entry.sets,
       reps: entry.reps,
       rpe: entry.rpe || '',
@@ -68,6 +69,7 @@ const TrainingEntriesList = ({ refresh }) => {
         exercise_type: editFormData.exercise_type,
         exercise_name: editFormData.exercise_name,
         weight: parseFloat(editFormData.weight),
+        weight_unit: editFormData.weight_unit,
         sets: parseInt(editFormData.sets),
         reps: parseInt(editFormData.reps),
         rpe: editFormData.rpe ? parseFloat(editFormData.rpe) : null,
@@ -154,7 +156,7 @@ const TrainingEntriesList = ({ refresh }) => {
                     />
                   </div>
                   <div className="form-row">
-                    <label>Weight (kg):</label>
+                    <label>Weight:</label>
                     <input
                       type="number"
                       name="weight"
@@ -163,6 +165,17 @@ const TrainingEntriesList = ({ refresh }) => {
                       step="0.01"
                       min="0"
                     />
+                  </div>
+                  <div className="form-row">
+                    <label>Unit:</label>
+                    <select
+                      name="weight_unit"
+                      value={editFormData.weight_unit}
+                      onChange={handleEditChange}
+                    >
+                      <option value="kg">Kilograms (kg)</option>
+                      <option value="lbs">Pounds (lbs)</option>
+                    </select>
                   </div>
                   <div className="form-row">
                     <label>Sets:</label>
@@ -224,7 +237,7 @@ const TrainingEntriesList = ({ refresh }) => {
                   <div className="entry-details">
                     <div className="entry-stats">
                       <span className="stat">
-                        <strong>Weight:</strong> {entry.weight} kg
+                        <strong>Weight:</strong> {entry.weight} {entry.weight_unit || 'kg'}
                       </span>
                       <span className="stat">
                         <strong>Sets:</strong> {entry.sets}

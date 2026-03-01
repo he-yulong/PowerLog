@@ -6,6 +6,7 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
     exercise_type: 'squat',
     exercise_name: 'Squat',
     weight: '0',
+    weight_unit: 'kg',
     sets: '1',
     reps: '1',
     rpe: '5',
@@ -68,6 +69,7 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
       exercise_type: formData.exercise_type,
       exercise_name: formData.exercise_name,
       weight: parseFloat(formData.weight),
+      weight_unit: formData.weight_unit,
       sets: parseInt(formData.sets),
       reps: parseInt(formData.reps),
       rpe: formData.rpe ? parseFloat(formData.rpe) : null,
@@ -96,6 +98,7 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
         exercise_type: 'squat',
         exercise_name: 'Squat',
         weight: '0',
+        weight_unit: 'kg',
         sets: '1',
         reps: '1',
         rpe: '5',
@@ -159,7 +162,7 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
         )}
 
         <div className="form-group">
-          <label htmlFor="weight">Weight (kg):</label>
+          <label htmlFor="weight">Weight:</label>
           <input
             type="number"
             id="weight"
@@ -170,6 +173,20 @@ const TrainingEntryForm = ({ onEntryAdded }) => {
             min="0"
             required
           />
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="weight_unit">Unit:</label>
+          <select
+            id="weight_unit"
+            name="weight_unit"
+            value={formData.weight_unit}
+            onChange={handleChange}
+            required
+          >
+            <option value="kg">Kilograms (kg)</option>
+            <option value="lbs">Pounds (lbs)</option>
+          </select>
         </div>
 
         <div className="form-group">
