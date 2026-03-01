@@ -6,3 +6,8 @@ from .serializers import TrainingEntrySerializer
 class TrainingEntryListCreateView(generics.ListCreateAPIView):
     queryset = TrainingEntry.objects.all()
     serializer_class = TrainingEntrySerializer
+
+
+class TrainingEntryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = TrainingEntry.objects.all()
+    serializer_class = TrainingEntrySerializer
