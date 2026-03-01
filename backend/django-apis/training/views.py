@@ -1,3 +1,8 @@
-from django.shortcuts import render
+from rest_framework import generics
+from .models import TrainingEntry
+from .serializers import TrainingEntrySerializer
 
-# Create your views here.
+
+class TrainingEntryListCreateView(generics.ListCreateAPIView):
+    queryset = TrainingEntry.objects.all()
+    serializer_class = TrainingEntrySerializer
