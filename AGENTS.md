@@ -13,7 +13,7 @@
 2. 常见格式：`python -m powerlog add --text '深蹲 140kg 5次×3组 RPE8' --today YYYY-MM-DD`。日期基准使用当前用户上下文的 Australia/Sydney 日期，勿固定复用示例日期。
 3. 自由表达由助手解析成 JSON 数组，再用 `python -m powerlog add --json <临时文件>` 或 `--json -` 写入。字段：`date`、`lift`（S/B/D）、`exercise`、`weight_kg`、`reps`、`sets`、可选 `rpe`、`notes`、`max`。临时文件放 `.powerlog-runtime/`。
    - `exercise` 一律用英文，沿用表中已有写法：Comp Squat、High-bar Squat、Pause Squat、Pin Squat、Front Squat、Comp Bench、Pause Bench、Larsen Bench、Spoto Press、Dumbbell Bench、Comp Deadlift、Conv Deadlift、Pause Deadlift、RDL 等。只说“深蹲/卧推/硬拉”时，默认对应 Comp Squat/Comp Bench/Comp Deadlift。中文只用于聊天讨论，不写入 Excel。表中没有的新动作，用简洁的英文名称并在回执中说明。
-4. 无日期默认当地今天，无单位默认公斤，并在回执展示。`140×5×3` 为重量×次数×组数。缺少组数、次数或动作等实质歧义先问清，不猜测。
+4. 无日期默认当地今天，无单位默认公斤，并在回执展示。`140×5×3` 为重量×次数×组数。用户确认（2026-10-12）：只有两个数字的 `167.5*2` 是重量×次数，记 1 组；`@9` 是 RPE；`9.15` 这类日期是月.日，年份取最近一个不晚于今天的日期。缺少组数、次数或动作等实质歧义先问清，不猜测。
 5. 不把计划、示例、疑问或讨论作为完成训练；不编造 RPE、备注、PR 或成绩。不同重量/次数拆成多条。
 6. 成功后回复日期、动作、重量、次数×组数和工作表。重复提示如实报告，只有用户明确是另一批相同训练才用 `--allow-duplicate`。
 7. 失败不能声称成功。Excel 占用时请用户关闭再试。
