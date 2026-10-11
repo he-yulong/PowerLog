@@ -122,6 +122,12 @@ test('partial-range variants are flagged so best weight and 1RM can skip them', 
   assert.equal(records[0].volume, 220);
 });
 
+test('accessory movements are flagged; barbell variants are not', () => {
+  const names = ['Push-ups', 'Dumbbell Bench', 'Dumbbell Press', 'Split Squat', 'Overhead Press', 'Shoulder Press', 'Comp Bench', 'Larsen Press', 'Spoto Press', 'High-bar Squat', 'Front Squat', 'RDL'];
+  const { records } = recordsFromRows(names.map((name, index) => ({ row: index + 3, values: ['2026-06-10', name, 20, 5, 1, '', '', ''] })), '2025-B');
+  assert.deepEqual(records.filter(record => record.accessory).map(record => record.exercise), names.slice(0, 6));
+});
+
 test('runs: distance, Excel or text times, pace and data issues', () => {
   const { runs, warnings } = runsFromRows([
     { row: 1, values: ['RUNNING', '', '', '', '', '', '', ''] },

@@ -12,6 +12,8 @@
   // RPE bands, easiest to hardest; colors live in styles.css (.rpe-badge.<band>).
   const rpeBand = rpe => rpe == null ? '' : rpe >= 10 ? 'max' : rpe >= 9 ? 'very-hard' : rpe >= 8 ? 'hard' : rpe >= 7 ? 'moderate' : 'easy';
   const rpeLabels = { easy: '轻松', moderate: '中等', hard: '吃力', 'very-hard': '很吃力', max: '极限' };
+  // Best weight and estimated 1RM skip partial-range and accessory movements; volume and sets count everything.
+  const countsTowardBest = record => !record.partialRange && !record.accessory;
   const localDay = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   function setNotice(message = '', error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
   function setBusy(value) { state.busy = value; $('import').disabled = value; $('refresh').disabled = value; }
@@ -30,7 +32,7 @@
   function daily(records, key) {
     const days = new Map();
     for (const record of records) {
-      if (!record.valid || !record.date || (key !== 'volume' && record.partialRange)) continue;
+      if (!record.valid || !record.date || (key !== 'volume' && !countsTowardBest(record))) continue;
       if (key === 'volume') days.set(record.date, (days.get(record.date) || 0) + record.volume);
       else days.set(record.date, Math.max(days.get(record.date) || 0, record[key] || 0));
     }
@@ -46,8 +48,8 @@
   function renderCards() {
     $('metric-cards').innerHTML = Object.entries(names).map(([lift, [name, english]]) => {
       const records = state.records.filter(record => record.lift === lift && record.valid);
-      const best = max(records.filter(record => !record.partialRange), 'weight');
-      return `<article class="metric-card"><div class="metric-top"><span class="lift-symbol">${icon('bars')}</span><div class="metric-title">${name}<span>${english}</span></div><span class="metric-tag">TRAINING BEST</span></div><div class="metric-main"><div><strong>${number(best)}<small>kg</small></strong><div class="metric-caption">最高训练重量 · 含变式，不含半程</div></div>${sparkline(records)}</div><div class="metric-bottom"><span>累计训练量<strong>${records.length ? number(sum(records, 'volume') / 1000) : '—'} t</strong></span><span>工作组<strong>${records.length ? number(sum(records, 'sets'), 0) : '—'} 组</strong></span></div></article>`;
+      const best = max(records.filter(countsTowardBest), 'weight');
+      return `<article class="metric-card"><div class="metric-top"><span class="lift-symbol">${icon('bars')}</span><div class="metric-title">${name}<span>${english}</span></div><span class="metric-tag">TRAINING BEST</span></div><div class="metric-main"><div><strong>${number(best)}<small>kg</small></strong><div class="metric-caption">最高训练重量 · 不含半程和辅助动作</div></div>${sparkline(records)}</div><div class="metric-bottom"><span>累计训练量<strong>${records.length ? number(sum(records, 'volume') / 1000) : '—'} t</strong></span><span>工作组<strong>${records.length ? number(sum(records, 'sets'), 0) : '—'} 组</strong></span></div></article>`;
     }).join('');
   }
   function renderChart() {
@@ -59,7 +61,7 @@
     $('chart-value').innerHTML = `${number(best)}<small> ${unit}</small>`;
     $('chart-value-label').textContent = { weight: '期间最高训练重量', e1rm: '期间最高估算 1RM', volume: '期间最高单日训练量' }[metric];
     $('chart-subtitle').textContent = points.length ? `${points[0].date.replaceAll('-', '.')} — ${points.at(-1).date.replaceAll('-', '.')} · ${points.length} 个训练日` : '当前范围内暂无可绘制的记录';
-    $('chart-note').textContent = { weight: '每日取最高工作组重量；包含全程变式，不含 Pin Squat (high) 等半程动作，不代表比赛成绩。', e1rm: 'Epley 估算 = 重量 × (1 + 次数 ÷ 30)，单次取实际重量，每日取最高值。不含半程动作；仅供训练参考，非比赛成绩；未使用原表 Max 列。', volume: '每日训练量 = 当日有效行的「重量 × 次数 × 组数」之和；单位 kg·次，含变式动作。' }[metric];
+    $('chart-note').textContent = { weight: '每日取最高工作组重量；包含全程杠铃变式，不含 Pin Squat (high) 等半程动作和哑铃、自重等辅助动作，不代表比赛成绩。', e1rm: 'Epley 估算 = 重量 × (1 + 次数 ÷ 30)，单次取实际重量，每日取最高值。不含半程动作和辅助动作；仅供训练参考，非比赛成绩；未使用原表 Max 列。', volume: '每日训练量 = 当日有效行的「重量 × 次数 × 组数」之和；单位 kg·次，含变式动作。' }[metric];
     const chart = $('chart');
     const bounds = dateBounds();
     if (bounds.start && bounds.end && bounds.start > bounds.end) { chart.innerHTML = `<div class="chart-empty">${icon('trend')}开始日期不能晚于结束日期<span>调整日期后即可查看趋势</span></div>`; return; }
@@ -132,7 +134,7 @@
       const detail = !record.date ? '<small>日期待确认</small>' : record.dateInferred ? `<small title="${escape(`${record.dateOriginal} → ${record.date}；${record.dateInference}`)}">已按顺序校正</small>` : '';
       const quantity = value => value == null || value === '' ? '—' : escape(value);
       const issues = record.issues.length ? `<span class="data-issue">${escape(record.issues.join('；'))}</span>` : '';
-      return `<tr><td class="date-cell">${date}${detail}</td><td><span class="lift-chip ${record.lift}">${names[record.lift][0]}</span>${escape(record.exercise)}</td><td class="weight-cell">${quantity(record.weightRaw)}<small>kg</small></td><td>${quantity(record.repsRaw)} <span aria-label="乘">×</span> ${quantity(record.setsRaw)}</td><td>${record.rpeRaw ? `<span class="rpe-badge ${rpeBand(record.rpe)}" title="RPE ${escape(record.rpeRaw)}${rpeBand(record.rpe) ? ` · ${rpeLabels[rpeBand(record.rpe)]}` : ''}">${escape(record.rpeRaw)}</span>` : '—'}</td><td>${record.valid ? `${number(record.volume)} <small>kg·次</small>` : '—'}</td><td class="note-cell">${escape(record.note || '—')}${record.manualMax ? `<span class="data-issue">原表 Max：${escape(record.manualMax)}</span>` : ''}${record.partialRange ? '<span class="data-issue">半程动作，不计入最高重量和 1RM</span>' : ''}${issues}</td></tr>`;
+      return `<tr><td class="date-cell">${date}${detail}</td><td><span class="lift-chip ${record.lift}">${names[record.lift][0]}</span>${escape(record.exercise)}</td><td class="weight-cell">${quantity(record.weightRaw)}<small>kg</small></td><td>${quantity(record.repsRaw)} <span aria-label="乘">×</span> ${quantity(record.setsRaw)}</td><td>${record.rpeRaw ? `<span class="rpe-badge ${rpeBand(record.rpe)}" title="RPE ${escape(record.rpeRaw)}${rpeBand(record.rpe) ? ` · ${rpeLabels[rpeBand(record.rpe)]}` : ''}">${escape(record.rpeRaw)}</span>` : '—'}</td><td>${record.valid ? `${number(record.volume)} <small>kg·次</small>` : '—'}</td><td class="note-cell">${escape(record.note || '—')}${record.manualMax ? `<span class="data-issue">原表 Max：${escape(record.manualMax)}</span>` : ''}${record.partialRange ? '<span class="data-issue">半程动作，不计入最高重量和 1RM</span>' : record.accessory ? '<span class="data-issue">辅助动作，不计入最高重量和 1RM</span>' : ''}${issues}</td></tr>`;
     }).join('') : `<tr><td colspan="7" class="empty-table"><strong>${state.loaded ? '当前筛选没有训练记录' : '你的下一次进步，从这里开始'}</strong>${state.loaded ? '切换项目或日期范围，看看其他训练。' : '选择 HylPowerliftingTraining.xlsx，读取你的真实训练数据。'}</td></tr>`;
     $('show-more').hidden = records.length <= state.limit;
     $('table-description').textContent = records.length ? `已显示 ${shown.length} / ${records.length} 条 · 日期明确的记录优先，按日期倒序` : '原始记录来自你的 Excel 工作簿';

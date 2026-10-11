@@ -9,6 +9,9 @@
   // Partial-range variants such as "Pin Squat (high)" move more than the full lift,
   // so they count toward volume but not toward best weight or estimated 1RM.
   const PARTIAL_RANGE = /\(high\)|\bhalf\b|\bquarter\b|\bpartial\b|\brack pulls?\b|\bblock pulls?\b|\bboard press\b/i;
+  // Accessory movements (dumbbells, bodyweight, unilateral or overhead work) use loads that are not
+  // comparable with the barbell lift, so they also stay out of best weight and estimated 1RM.
+  const ACCESSORY = /\bdumbbells?\b|\bdb\b|\bpush-?ups?\b|\bbodyweight\b|\bsplit squats?\b|\boverhead press\b|\bshoulder press\b/i;
   // Runs live in their own sheet: A date, B distance km, C time, D notes.
   const RUN_SHEET = 'Running';
   function fail(message) { throw new Error(message); }
@@ -295,7 +298,7 @@
       const record = {
         id: `${sheet}:${row}`, row, sheet, lift: lifts[sheet], date: parsedDate.date,
         dateOriginal: parsedDate.dateOriginal, dateInferred: parsedDate.dateInferred, dateInference: parsedDate.dateInference,
-        dateRaw: String(dateRaw ?? ''), exercise: String(exerciseRaw || '未填写动作'), partialRange: PARTIAL_RANGE.test(String(exerciseRaw ?? '')),
+        dateRaw: String(dateRaw ?? ''), exercise: String(exerciseRaw || '未填写动作'), partialRange: PARTIAL_RANGE.test(String(exerciseRaw ?? '')), accessory: ACCESSORY.test(String(exerciseRaw ?? '')),
         weight, reps, sets, weightRaw, repsRaw, setsRaw, manualMax: String(manualMax ?? ''),
         rpe: numeric(rpeRaw), rpeRaw: String(rpeRaw ?? ''), note: String(note ?? ''), valid,
         volume: valid ? calculatedVolume : null,
