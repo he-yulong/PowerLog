@@ -384,5 +384,5 @@
     for (const name of Object.keys(lifts)) if (!sheets.includes(name)) warnings.push({ sheet: name, row: null, message: '未找到此工作表' });
     return { records, warnings, sheets, date1904, dateCorrections };
   }
-  root.PowerLogXlsx = Object.freeze({ readWorkbook, parseDate, inferDateSequence, recordsFromRows, unzip });
+  root.PowerLogXlsx = Object.freeze({ readWorkbook, parseDate, inferDateSequence, recordsFromRows, isoNumberFormat, unzip });
 })(typeof window !== 'undefined' ? window : globalThis);

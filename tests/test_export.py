@@ -1,9 +1,11 @@
 """The mobile exporter must retain dates, merged metadata and newly appended data."""
 import hashlib
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import unittest
+from zipfile import ZipFile
 
 from powerlog.export import read_rows
 from powerlog.workbook import append_records, excel_date
@@ -20,10 +22,14 @@ class MobileExportTests(unittest.TestCase):
         self.assertEqual(SOURCE.read_bytes(), original)
         sheets = {sheet["name"]: sheet["rows"] for sheet in exported["sheets"]}
         self.assertEqual(set(sheets), {"2025-S", "2025-B", "2025-D"})
-        for sheet, row, date in [("2025-S", 294, "2026-10-03"), ("2025-B", 618, "2026-10-03"), ("2025-D", 270, "2026-03-10")]:
-            item = next(item for item in sheets[sheet] if item["row"] == row)
-            self.assertEqual(item["values"][0], excel_date(date))
-            self.assertEqual(item["dateAnchor"], row)
+        # The export must carry each date cell's stored value unchanged.
+        with ZipFile(SOURCE) as archive:
+            for sheet, part, row in [("2025-S", "sheet1", 294), ("2025-B", "sheet2", 618), ("2025-D", "sheet3", 270)]:
+                xml = archive.read(f"xl/worksheets/{part}.xml").decode("utf-8")
+                stored = float(re.search(rf'<c r="A{row}"[^>]*>\s*<v>([^<]+)</v>', xml).group(1))
+                item = next(item for item in sheets[sheet] if item["row"] == row)
+                self.assertEqual(item["values"][0], stored)
+                self.assertEqual(item["dateAnchor"], row)
         for rows in sheets.values():
             by_row = {row["row"]: row for row in rows}
             merged = [row for row in rows if row.get("dateAnchor", row["row"]) != row["row"]]

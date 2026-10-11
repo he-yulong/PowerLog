@@ -155,6 +155,36 @@ def _date_style(styles: bytes) -> tuple[bytes, int]:
     return (text[:block.start()] + new_block + text[block.end():]).encode("utf-8"), len(xfs)
 
 
+def _iso_date_variants(styles: bytes, bases: set[int]) -> tuple[bytes, dict[int, int]]:
+    """Map each cell style to a copy that shows yyyy-mm-dd, keeping its borders, fills and fonts."""
+    styles, _ = _date_style(styles)  # Ensures the yyyy-mm-dd number format exists.
+    text = styles.decode("utf-8")
+    root = ET.fromstring(styles)
+    fmt_id = next(f.get("numFmtId") for f in root.find("m:numFmts", NS) if f.get("formatCode") == "yyyy-mm-dd")
+    xfs = list(root.find("m:cellXfs", NS))
+    existing = [ET.tostring(xf) for xf in xfs]
+    mapping, added = {}, []
+    for base in sorted(bases):
+        if base >= len(xfs):
+            raise WorkbookError("单元格样式编号无效。")
+        if xfs[base].get("numFmtId") == fmt_id:
+            mapping[base] = base
+            continue
+        clone = ET.fromstring(ET.tostring(xfs[base]))
+        clone.set("numFmtId", fmt_id)
+        clone.set("applyNumberFormat", "1")
+        key = ET.tostring(clone)
+        if key not in existing:
+            existing.append(key)
+            added.append(ET.tostring(clone, encoding="unicode").replace('ns0:', '').replace(' xmlns:ns0="' + NS['m'] + '"', ''))
+        mapping[base] = existing.index(key)
+    if added:
+        block = re.search(r'<cellXfs\b[^>]*>(.*?)</cellXfs>', text, re.S)
+        new_block = re.sub(r'count="\d+"', f'count="{len(existing)}"', block.group(0), count=1).replace("</cellXfs>", "".join(added) + "</cellXfs>")
+        text = text[:block.start()] + new_block + text[block.end():]
+    return text.encode("utf-8"), mapping
+
+
 def build_update(path: Path, records: list[dict], destination: Path) -> list[dict]:
     """Build a candidate file; never overwrite the source here."""
     updates = []
@@ -223,6 +253,73 @@ def _text_of(cell: str, strings: list[str]) -> str:
     return unescape(value.group(1)) if value else ""
 
 
+def _shared_strings(archive: ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in archive.namelist():
+        return []
+    return ["".join(t.text or "" for t in item.iter(f"{{{NS['m']}}}t")) for item in ET.fromstring(archive.read("xl/sharedStrings.xml"))]
+
+
+def _find_cell(text: str, ref: str):
+    return re.search(rf'<c r="{ref}"(?=[\s/>])[^>]*?(?:/>|>.*?</c>)', text, re.S)
+
+
+def _write_candidate(source: ZipFile, destination: Path, changed: dict[str, bytes]):
+    with ZipFile(destination, "w") as output:
+        output.comment = source.comment
+        for entry in source.infolist():
+            output.writestr(entry, changed.get(entry.filename, source.read(entry.filename)))
+
+
+def _check_candidate(destination: Path, members):
+    with ZipFile(destination) as check:
+        if check.testzip():
+            raise WorkbookError("生成的文件未通过 ZIP 完整性校验。")
+        for member in members:
+            ET.fromstring(check.read(member))
+
+
+def build_set_dates(path: Path, changes: list[dict], destination: Path) -> list[dict]:
+    """Rewrite date cells (column A) as real dates shown as yyyy-mm-dd; each must still hold ``from``."""
+    with ZipFile(path) as source:
+        paths, is_1904 = sheet_paths(source)
+        strings = _shared_strings(source)
+        texts, bases = {}, {}
+        for change in changes:
+            name, ref = change["sheet"], f"A{change['row']}"
+            if name not in paths:
+                raise WorkbookError(f"找不到工作表：{name}")
+            if name not in texts:
+                texts[name] = source.read(paths[name]).decode("utf-8")
+                if ET.fromstring(texts[name]).find("m:sheetProtection", NS) is not None:
+                    raise WorkbookError(f"{name} 已保护，不能修改。")
+            match = _find_cell(texts[name], ref)
+            cell = match.group(0) if match else ""
+            if "<f>" in cell or "<f " in cell:
+                raise WorkbookError(f"{name}!{ref} 是公式，不能直接改日期。")
+            current, expected = _text_of(cell, strings), change["from"]
+            is_text = bool(re.search(r'\st="(?:s|inlineStr|str)"', cell))
+            try:
+                same = current == expected if is_text else not isinstance(expected, str) and float(current) == float(expected)
+            except ValueError:
+                same = False
+            if not match or is_text != isinstance(expected, str) or not same:
+                raise WorkbookError(f"{name}!{ref} 当前是“{current}”，不是预期的“{expected}”，未做任何修改。")
+            style = re.search(r'\ss="(\d+)"', cell)
+            bases[(name, ref)] = int(style.group(1)) if style else 0
+        styles, variants = _iso_date_variants(source.read("xl/styles.xml"), set(bases.values()))
+        updates = []
+        for change in changes:
+            name, ref = change["sheet"], f"A{change['row']}"
+            match = _find_cell(texts[name], ref)
+            cell = f'<c r="{ref}" s="{variants[bases[(name, ref)]]}"><v>{excel_date(change["to"], is_1904)}</v></c>'
+            texts[name] = texts[name][:match.start()] + cell + texts[name][match.end():]
+            updates.append({"sheet": name, "cell": ref, "from": change["from"], "to": change["to"]})
+        changed = {"xl/styles.xml": styles, **{paths[name]: text.encode("utf-8") for name, text in texts.items()}}
+        _write_candidate(source, destination, changed)
+    _check_candidate(destination, changed)
+    return updates
+
+
 def build_rename(path: Path, sheet: str, rows: list[int], old: str, new: str, destination: Path) -> list[dict]:
     """Change exercise names (column B) in place; rows inside a merged B range use its first cell."""
     with ZipFile(path) as source:
@@ -233,9 +330,7 @@ def build_rename(path: Path, sheet: str, rows: list[int], old: str, new: str, de
         root = ET.fromstring(text)
         if root.find("m:sheetProtection", NS) is not None:
             raise WorkbookError(f"{sheet} 已保护，不能修改。")
-        strings = []
-        if "xl/sharedStrings.xml" in source.namelist():
-            strings = ["".join(t.text or "" for t in item.iter(f"{{{NS['m']}}}t")) for item in ET.fromstring(source.read("xl/sharedStrings.xml"))]
+        strings = _shared_strings(source)
         merged = {}
         for merge in root.findall("m:mergeCells/m:mergeCell", NS):
             match = re.fullmatch(r"B(\d+):B(\d+)", merge.get("ref", ""))
@@ -245,7 +340,7 @@ def build_rename(path: Path, sheet: str, rows: list[int], old: str, new: str, de
         updates = []
         for first in sorted({merged.get(row, (row, row))[0] for row in rows}):
             ref = f"B{first}"
-            match = re.search(rf'<c r="{ref}"(?=[\s/>])[^>]*?(?:/>|>.*?</c>)', text, re.S)
+            match = _find_cell(text, ref)
             current = _text_of(match.group(0), strings) if match else ""
             if not match or current != old:
                 raise WorkbookError(f"{sheet}!{ref} 当前是“{current}”，不是“{old}”，未做任何修改。")
@@ -260,15 +355,8 @@ def build_rename(path: Path, sheet: str, rows: list[int], old: str, new: str, de
             text = text[:match.start()] + cell + text[match.end():]
             last = merged.get(first, (first, first))[1]
             updates.append({"sheet": sheet, "range": ref if last == first else f"{ref}:B{last}", "from": old, "to": new})
-        changed = text.encode("utf-8")
-        with ZipFile(destination, "w") as output:
-            output.comment = source.comment
-            for entry in source.infolist():
-                output.writestr(entry, changed if entry.filename == paths[sheet] else source.read(entry.filename))
-    with ZipFile(destination) as check:
-        if check.testzip():
-            raise WorkbookError("生成的文件未通过 ZIP 完整性校验。")
-        ET.fromstring(check.read(paths[sheet]))
+        _write_candidate(source, destination, {paths[sheet]: text.encode("utf-8")})
+    _check_candidate(destination, [paths[sheet]])
     return updates
 
 
@@ -401,6 +489,42 @@ def rename_exercise(path: Path | str, sheet: str, rows: list[int], old: str, new
         raise WorkbookError("请提供表头以下的行号。")
     if not path.is_file():
         raise WorkbookError(f"工作簿不存在：{path}")
+    return _apply_edit(path, lambda candidate: build_rename(path, sheet, rows, old, new, candidate), dry_run)
+
+
+def set_dates(path: Path | str, changes: list[dict], *, dry_run: bool = False) -> dict:
+    """Rewrite existing date cells as explicit yyyy-mm-dd dates, e.g. to settle legacy day/month order.
+
+    Each change is ``{"sheet", "row", "from", "to"}``; ``from`` is the cell's current value
+    (Excel serial number or text) and every cell must still hold it, or nothing changes.
+    """
+    path = Path(path).resolve()
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 5000:
+        raise WorkbookError("请提供 1–5000 个日期更正。")
+    normalized, seen = [], set()
+    for change in changes:
+        if not isinstance(change, dict) or set(change) != {"sheet", "row", "from", "to"}:
+            raise WorkbookError("每个日期更正必须只有 sheet、row、from、to 四个字段。")
+        sheet, row, old = change["sheet"], change["row"], change["from"]
+        if sheet not in SHEETS.values() or isinstance(row, bool) or not isinstance(row, int) or row <= 2 or (sheet, row) in seen:
+            raise WorkbookError(f"日期更正的位置无效：{sheet} 第 {row} 行。")
+        if isinstance(old, bool) or not isinstance(old, (str, int, float)):
+            raise WorkbookError(f"{sheet} 第 {row} 行缺少当前值。")
+        try:
+            day = date.fromisoformat(change["to"])
+        except (TypeError, ValueError):
+            raise WorkbookError(f"{sheet} 第 {row} 行的新日期必须是 YYYY-MM-DD。") from None
+        if not 1900 <= day.year <= 2100:
+            raise WorkbookError(f"{sheet} 第 {row} 行的新日期年份超出 1900–2100。")
+        seen.add((sheet, row))
+        normalized.append({"sheet": sheet, "row": row, "from": old, "to": day.isoformat()})
+    if not path.is_file():
+        raise WorkbookError(f"工作簿不存在：{path}")
+    return _apply_edit(path, lambda candidate: build_set_dates(path, normalized, candidate), dry_run)
+
+
+def _apply_edit(path: Path, build, dry_run: bool) -> dict:
+    """Run one journaled, undoable correction of existing cells."""
     with _locked(path):
         before = path.read_bytes()
         before_hash = digest(before)
@@ -410,7 +534,7 @@ def rename_exercise(path: Path | str, sheet: str, rows: list[int], old: str, new
         os.close(fd)
         candidate = Path(temp_name)
         try:
-            updates = build_rename(path, sheet, rows, old, new, candidate)
+            updates = build(candidate)
             if dry_run:
                 return {"status": "preview", "workbook": str(path), "updates": updates}
             backup = _commit(path, before, before_hash, state, candidate, {"action": "edit", "updates": updates})

@@ -61,6 +61,10 @@ python -m powerlog add --text '昨天 卧推 90kg 3次×4组' --today 2026-10-05
 # 更正已有行的动作名（先 --dry-run 预览）
 python -m powerlog rename-exercise --sheet 2025-B --rows 55-59 --from 'Comp Deadlift' --to 'Comp Bench' --dry-run
 
+# 把旧格式日期改成明确的 yyyy-mm-dd 日期（先生成计划，再预览，再写入）
+node scripts/plan-date-fixes.mjs python > .powerlog-runtime/date-plan.json
+python -m powerlog set-dates --json .powerlog-runtime/date-plan.json --dry-run
+
 # 撤销最近一次写入或更正
 python -m powerlog undo
 ```

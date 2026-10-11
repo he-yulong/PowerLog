@@ -7,11 +7,16 @@ import vm from 'node:vm';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
 
-export async function buildSnapshot(python) {
+// Raw worksheet rows from powerlog.export, and the dashboard's own reader (web/xlsx-reader.js).
+export async function exportRows(python) {
   const input = spawnSync(python, ['-m', 'powerlog.export', path.join(root, 'HylPowerliftingTraining.xlsx')], { cwd: root, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
   if (input.status !== 0) throw new Error(input.stderr || input.error?.message || 'Excel 导出失败');
-  const raw = JSON.parse(input.stdout);
-  vm.runInThisContext(await readFile(path.join(root, 'web/xlsx-reader.js'), 'utf8'));
+  if (!globalThis.PowerLogXlsx) vm.runInThisContext(await readFile(path.join(root, 'web/xlsx-reader.js'), 'utf8'));
+  return { raw: JSON.parse(input.stdout), reader: globalThis.PowerLogXlsx };
+}
+
+export async function buildSnapshot(python) {
+  const { raw } = await exportRows(python);
   const snapshot = { schemaVersion: 1, generatedAt: new Date().toISOString(), sourceSha256: raw.sourceSha256, date1904: raw.date1904, records: [], warnings: [], sheets: [], dateCorrections: [] };
   for (const sheet of raw.sheets) {
     const result = globalThis.PowerLogXlsx.recordsFromRows(sheet.rows, sheet.name, raw.date1904);

@@ -47,7 +47,9 @@ class WorkbookSafetyTests(unittest.TestCase):
         new_members = self.members()
         self.assertEqual(old_members.keys(), new_members.keys())
         modified = {key for key in old_members if old_members[key] != new_members[key]}
-        self.assertEqual(modified, {"xl/styles.xml", "xl/worksheets/sheet1.xml"})
+        # styles.xml changes only the first time a yyyy-mm-dd date style is needed.
+        self.assertIn("xl/worksheets/sheet1.xml", modified)
+        self.assertLessEqual(modified, {"xl/styles.xml", "xl/worksheets/sheet1.xml"})
         old_sheet = old_members["xl/worksheets/sheet1.xml"].decode("utf-8")
         new_sheet = new_members["xl/worksheets/sheet1.xml"].decode("utf-8")
         new_row = int(re.search(r"\d+", result["updates"][0]["range"]).group())
@@ -280,6 +282,48 @@ class WorkbookSafetyTests(unittest.TestCase):
         with self.assertRaises(workbook.WorkbookError):
             workbook.rename_exercise(self.path, "2025-B", [55], self.bench_names()[55] + " (not this)", "Comp Bench")
         self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertFalse(self.state().exists())
+
+    def deadlift_dates(self):
+        rows = next(sheet["rows"] for sheet in read_rows(self.path)["sheets"] if sheet["name"] == "2025-D")
+        return {row["row"]: row for row in rows if row["row"] > 2 and row["values"][0] != "" and row.get("dateAnchor", row["row"]) == row["row"]}
+
+    def cell_style(self, ref):
+        with ZipFile(self.path) as archive:
+            sheet = archive.read("xl/worksheets/sheet3.xml").decode("utf-8")
+            styles = ET.fromstring(archive.read("xl/styles.xml"))
+        index = int(re.search(rf'<c r="{ref}"[^>]*?\ss="(\d+)"', sheet).group(1))
+        return dict(styles.find("m:cellXfs", workbook.NS)[index].attrib)
+
+    def test_set_dates_writes_iso_dates_keeps_cell_look_and_can_be_undone(self):
+        row, cell = next(iter(self.deadlift_dates().items()))
+        old_members, old_style = self.members(), self.cell_style(f"A{row}")
+        result = workbook.set_dates(self.path, [{"sheet": "2025-D", "row": row, "from": cell["values"][0], "to": "2025-01-02"}])
+        self.assertEqual(result["status"], "saved")
+        new_members = self.members()
+        self.assertLessEqual({key for key in old_members if old_members[key] != new_members[key]}, {"xl/styles.xml", "xl/worksheets/sheet3.xml"})
+        updated = self.deadlift_dates()[row]
+        self.assertEqual((updated["values"][0], updated["numberFormat"]), (workbook.excel_date("2025-01-02"), "yyyy-mm-dd"))
+        new_style = self.cell_style(f"A{row}")
+        for key in ("fontId", "fillId", "borderId"):
+            self.assertEqual(new_style.get(key), old_style.get(key))
+        self.assertEqual(workbook.undo_last(self.path)["status"], "undone")
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_set_dates_refuses_stale_values_and_bad_input(self):
+        row, cell = next(iter(self.deadlift_dates().items()))
+        bad_changes = [
+            [{"sheet": "2025-D", "row": row, "from": cell["values"][0] + 1, "to": "2025-01-02"}],
+            [{"sheet": "2025-D", "row": row, "from": str(cell["values"][0]), "to": "2025-01-02"}],
+            [{"sheet": "2025-D", "row": row, "from": cell["values"][0], "to": "2025-02-30"}],
+            [{"sheet": "2025-D", "row": 2, "from": cell["values"][0], "to": "2025-01-02"}],
+            [{"sheet": "2025-X", "row": row, "from": cell["values"][0], "to": "2025-01-02"}],
+            [{"sheet": "2025-D", "row": row, "from": cell["values"][0], "to": "2025-01-02"}] * 2,
+        ]
+        for changes in bad_changes:
+            with self.subTest(changes=changes), self.assertRaises(workbook.WorkbookError):
+                workbook.set_dates(self.path, changes)
+            self.assertEqual(self.path.read_bytes(), self.original)
         self.assertFalse(self.state().exists())
 
     def test_undo_rechecks_external_edits_before_replace(self):

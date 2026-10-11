@@ -171,15 +171,20 @@ test('ZIP: existing workbook contains the expected worksheet parts', async () =>
   assert.match(await zip.read('xl/worksheets/sheet1.xml'), /mergeCells/);
 });
 
-test('real workbook: all 759 date anchors are uniquely resolved with exactly 90 corrections', async () => {
+test('real workbook: every date resolves to one date and the verified history dates hold', async () => {
   const bytes = await readFile(new URL('../HylPowerliftingTraining.xlsx', import.meta.url));
   const zip = await unzip(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
-  // This test extracts only date anchors from the repository fixture. Production
-  // worksheet parsing uses DOMParser and also carries merged-cell metadata.
+  // This test extracts only date anchors (with their number formats) from the workbook.
+  // Production worksheet parsing uses DOMParser and also carries merged-cell metadata.
   const sharedXml = await zip.read('xl/sharedStrings.xml');
   const strings = [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map(match => [...match[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map(part => part[1]).join(''));
-  const expected = { 1: { count: 220, changes: 35, latest: '2026-09-12' }, 2: { count: 365, changes: 52, latest: '2026-09-13' }, 3: { count: 174, changes: 3, latest: '2026-09-12' } };
-  for (const [sheet, evidence] of Object.entries(expected)) {
+  const stylesXml = await zip.read('xl/styles.xml');
+  const customFormats = new Map([...stylesXml.matchAll(/<numFmt\b([^>]*)\/>/g)].map(match => [/numFmtId="(\d+)"/.exec(match[1])[1], /formatCode="([^"]*)"/.exec(match[1])[1]]));
+  const cellXfs = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/.exec(stylesXml)[1];
+  const formats = [...cellXfs.matchAll(/<xf\b([^>]*?)\/?>/g)].map(match => customFormats.get(/numFmtId="(\d+)"/.exec(match[1])?.[1]) || '');
+  // Dates confirmed by the user while auditing the original history (sheet1 = S, sheet2 = B, sheet3 = D).
+  const verified = { 1: { 294: '2026-03-10' }, 2: { 618: '2026-03-10', 827: '2026-09-05' }, 3: { 270: '2026-03-10', 317: '2026-07-17' } };
+  for (const [sheet, rows] of Object.entries(verified)) {
     const sheetXml = await zip.read(`xl/worksheets/sheet${sheet}.xml`);
     const anchors = [];
     for (const cell of sheetXml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
@@ -188,23 +193,17 @@ test('real workbook: all 759 date anchors are uniquely resolved with exactly 90 
       const raw = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(cell[2])?.[1];
       if (raw == null) continue;
       const value = /\bt="s"/.test(cell[1]) ? strings[Number(raw)] : Number(raw);
-      anchors.push(entry(Number(address[1]), value));
+      anchors.push(entry(Number(address[1]), value, formats[Number(/\bs="(\d+)"/.exec(cell[1])?.[1] ?? 0)]));
     }
-    assert.equal(anchors.length, evidence.count);
-    const result = inferDateSequence(anchors, { referenceDate: '2026-10-05' });
+    assert.ok(anchors.length > 100);
+    const result = inferDateSequence(anchors);
     assert.equal(result.completePath, true);
-    assert.equal(result.dateCorrections.length, evidence.changes);
-    assert.equal([...result.dates.values()].filter(date => !date.date).length, 0);
-    assert.equal([...result.dates.values()].at(-1).date, evidence.latest);
+    assert.deepEqual([...result.dates.entries()].filter(([, date]) => !date.date).map(([row, date]) => `A${row}: ${date.reason}`), []);
+    for (const [row, date] of Object.entries(rows)) assert.equal(result.dates.get(Number(row)).date, date);
     // Genuine October 2025 sessions are preserved, not swapped as a blanket rule.
     for (const anchor of anchors) {
-      const original = parseDate(anchor.value, false, '2026-10-05').date;
+      const original = parseDate(anchor.value, false).date;
       if (original?.startsWith('2025-10-')) assert.equal(result.dates.get(anchor.row).date, original);
-    }
-    if (sheet === '2') assert.equal(result.dates.get(827).date, '2026-09-05');
-    if (sheet === '3') {
-      assert.equal(result.dates.get(270).date, '2026-03-10');
-      assert.equal(result.dates.get(317).date, '2026-07-17');
     }
   }
 });

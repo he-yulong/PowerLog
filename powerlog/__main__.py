@@ -6,7 +6,11 @@ from pathlib import Path
 import sys
 
 from .parser import ParseError, parse_training
-from .workbook import WorkbookError, append_records, rename_exercise, undo_last
+from .workbook import WorkbookError, append_records, rename_exercise, set_dates, undo_last
+
+
+def _read_json(source: Path):
+    return json.loads(sys.stdin.read() if str(source) == '-' else source.read_text(encoding='utf-8-sig'))
 
 
 def _rows(value: str) -> list[int]:
@@ -38,6 +42,9 @@ def main():
     rename.add_argument('--from', dest='old', required=True, help='当前动作名，必须完全一致')
     rename.add_argument('--to', dest='new', required=True, help='新动作名')
     rename.add_argument('--dry-run', action='store_true', help='仅预览，不修改工作簿')
+    dates = commands.add_parser('set-dates', help='把已有日期单元格（A列）改成明确的 yyyy-mm-dd 日期')
+    dates.add_argument('--json', type=Path, required=True, help='[{"sheet","row","from","to"}] 数组文件；- 表示标准输入。from 必须等于单元格当前值')
+    dates.add_argument('--dry-run', action='store_true', help='仅预览，不修改工作簿')
     commands.add_parser('undo', help='撤销最近一次写入或更正，外部修改后不会自动覆盖')
     args = parser.parse_args()
     try:
@@ -45,12 +52,10 @@ def main():
             result = undo_last(args.workbook)
         elif args.command == 'rename-exercise':
             result = rename_exercise(args.workbook, args.sheet, args.rows, args.old, args.new, dry_run=args.dry_run)
+        elif args.command == 'set-dates':
+            result = set_dates(args.workbook, _read_json(args.json), dry_run=args.dry_run)
         else:
-            if args.text is not None:
-                records = parse_training(args.text, base_date=args.today)
-            else:
-                payload = sys.stdin.read() if str(args.json) == '-' else args.json.read_text(encoding='utf-8-sig')
-                records = json.loads(payload)
+            records = parse_training(args.text, base_date=args.today) if args.text is not None else _read_json(args.json)
             result = append_records(args.workbook, records, dry_run=args.dry_run, request_id=args.request_id, allow_duplicate=args.allow_duplicate)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
