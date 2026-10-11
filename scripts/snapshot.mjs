@@ -17,13 +17,18 @@ export async function exportRows(python) {
 
 export async function buildSnapshot(python) {
   const { raw } = await exportRows(python);
-  const snapshot = { schemaVersion: 1, generatedAt: new Date().toISOString(), sourceSha256: raw.sourceSha256, date1904: raw.date1904, records: [], warnings: [], sheets: [], dateCorrections: [] };
+  const snapshot = { schemaVersion: 1, generatedAt: new Date().toISOString(), sourceSha256: raw.sourceSha256, date1904: raw.date1904, records: [], runs: [], warnings: [], sheets: [], dateCorrections: [] };
   for (const sheet of raw.sheets) {
     const result = globalThis.PowerLogXlsx.recordsFromRows(sheet.rows, sheet.name, raw.date1904);
     snapshot.records.push(...result.records);
     snapshot.warnings.push(...result.warnings);
     snapshot.dateCorrections.push(...result.dateCorrections);
     snapshot.sheets.push(sheet.name);
+  }
+  if (raw.runs) {
+    const result = globalThis.PowerLogXlsx.runsFromRows(raw.runs.rows, raw.date1904);
+    snapshot.runs.push(...result.runs);
+    snapshot.warnings.push(...result.warnings);
   }
   if (!snapshot.records.length) throw new Error('没有训练记录，停止发布空白数据。');
   return snapshot;
@@ -57,5 +62,5 @@ async function checkAssets(directory) {
 }
 
 export function summary(snapshot, extra = {}) {
-  return JSON.stringify({ ...extra, records: snapshot.records.length, dateCorrections: snapshot.dateCorrections.length, generatedAt: snapshot.generatedAt, sourceSha256: snapshot.sourceSha256, latest: Object.fromEntries(snapshot.sheets.map(sheet => [sheet, snapshot.records.filter(r => r.sheet === sheet && r.date).map(r => r.date).sort().at(-1)])) });
+  return JSON.stringify({ ...extra, records: snapshot.records.length, runs: snapshot.runs.length, dateCorrections: snapshot.dateCorrections.length, generatedAt: snapshot.generatedAt, sourceSha256: snapshot.sourceSha256, latest: Object.fromEntries(snapshot.sheets.map(sheet => [sheet, snapshot.records.filter(r => r.sheet === sheet && r.date).map(r => r.date).sort().at(-1)])) });
 }

@@ -6,7 +6,7 @@ import test from 'node:test';
 
 const source = await readFile(new URL('../web/xlsx-reader.js', import.meta.url), 'utf8');
 vm.runInThisContext(source);
-const { parseDate, inferDateSequence, recordsFromRows, unzip } = globalThis.PowerLogXlsx;
+const { parseDate, inferDateSequence, recordsFromRows, runsFromRows, unzip } = globalThis.PowerLogXlsx;
 
 test('dates: ISO, both Excel epochs, leap-day bug, ambiguous strings and anomalous years', () => {
   assert.equal(parseDate(45660).date, '2025-01-03');
@@ -120,6 +120,25 @@ test('partial-range variants are flagged so best weight and 1RM can skip them', 
   ], '2025-S');
   assert.deepEqual(records.map(record => record.partialRange), [true, false, false]);
   assert.equal(records[0].volume, 220);
+});
+
+test('runs: distance, Excel or text times, pace and data issues', () => {
+  const { runs, warnings } = runsFromRows([
+    { row: 1, values: ['RUNNING', '', '', '', '', '', '', ''] },
+    { row: 2, values: ['Date', 'Distance (km)', 'Time', 'Avg HR', 'RPE', 'Notes', '', ''] },
+    { row: 3, values: [serial('2026-09-11'), 12, '', '', '', '', '', ''] },
+    { row: 4, values: [serial('2026-09-12'), 10, (50 * 60) / 86400, 150, 6, 'tempo', '', ''] },
+    { row: 5, values: ['2026-09-13', 21.1, '1:45:30', '', '', '', '', ''] },
+    { row: 6, values: ['2026-09-14', '', '30:00', '', '', '', '', ''] },
+    { row: 7, values: ['2026-09-15', 5, 'soon', '', '', '', '', ''] }
+  ], false);
+  assert.equal(runs.length, 5);
+  assert.deepEqual([runs[0].date, runs[0].distance, runs[0].seconds, runs[0].pace], ['2026-09-11', 12, null, null]);
+  assert.deepEqual([runs[1].seconds, runs[1].pace, runs[1].avgHr, runs[1].rpe, runs[1].note], [3000, 300, 150, 6, 'tempo']);
+  assert.equal(runs[2].seconds, 6330);
+  assert.equal(runs[3].valid, false);
+  assert.match(runs[4].issues.join(), /用时格式无效/);
+  assert.equal(warnings.length, 2);
 });
 
 test('single-rep work uses actual weight and overflowing metrics are excluded', () => {

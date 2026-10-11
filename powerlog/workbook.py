@@ -17,11 +17,15 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape, unescape
-from zipfile import ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-RID = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+RID = "{" + REL_NS + "}id"
 SHEETS = {"S": "2025-S", "B": "2025-B", "D": "2025-D"}
+# Runs live in their own sheet: A date, B distance km, C time, D average heart rate, E RPE, F notes.
+RUN_SHEET = "Running"
+RUN_HEADERS = ("Date", "Distance (km)", "Time", "Avg HR", "RPE", "Notes")
 
 
 class WorkbookError(ValueError):
@@ -155,12 +159,41 @@ def _date_style(styles: bytes) -> tuple[bytes, int]:
     return (text[:block.start()] + new_block + text[block.end():]).encode("utf-8"), len(xfs)
 
 
+def _ensure_number_format(styles: bytes, code: str) -> tuple[bytes, str]:
+    """Return the numFmtId for ``code``, appending a custom number format when it is missing."""
+    root = ET.fromstring(styles)
+    numfmts = root.find("m:numFmts", NS)
+    if numfmts is not None:
+        existing = next((f.get("numFmtId") for f in numfmts if f.get("formatCode") == code), None)
+        if existing is not None:
+            return styles, existing
+    fmt_id = str(max([163] + ([int(f.get("numFmtId")) for f in numfmts] if numfmts is not None else [])) + 1)
+    entry = f'<numFmt numFmtId="{fmt_id}" formatCode="{escape(code, {chr(34): "&quot;"})}"/>'
+    text = styles.decode("utf-8")
+    if numfmts is None:
+        text, count = re.subn(r"<styleSheet\b[^>]*>", lambda m: m.group(0) + f'<numFmts count="1">{entry}</numFmts>', text, count=1)
+    else:
+        block = re.search(r'<numFmts\b[^>]*(?:/>|>.*?</numFmts>)', text, re.S)
+        count = 1 if block else 0
+        if block:
+            old = block.group(0)
+            new = f'<numFmts count="1">{entry}</numFmts>' if old.endswith('/>') else re.sub(r'count="\d+"', f'count="{len(numfmts) + 1}"', old, count=1).replace('</numFmts>', entry + '</numFmts>')
+            text = text[:block.start()] + new + text[block.end():]
+    if not count:
+        raise WorkbookError("无法追加数字格式。")
+    return text.encode("utf-8"), fmt_id
+
+
 def _iso_date_variants(styles: bytes, bases: set[int]) -> tuple[bytes, dict[int, int]]:
     """Map each cell style to a copy that shows yyyy-mm-dd, keeping its borders, fills and fonts."""
-    styles, _ = _date_style(styles)  # Ensures the yyyy-mm-dd number format exists.
+    return _number_format_variants(styles, bases, "yyyy-mm-dd")
+
+
+def _number_format_variants(styles: bytes, bases: set[int], code: str) -> tuple[bytes, dict[int, int]]:
+    """Map each cell style to a copy that uses number format ``code``, keeping its look otherwise."""
+    styles, fmt_id = _ensure_number_format(styles, code)
     text = styles.decode("utf-8")
     root = ET.fromstring(styles)
-    fmt_id = next(f.get("numFmtId") for f in root.find("m:numFmts", NS) if f.get("formatCode") == "yyyy-mm-dd")
     xfs = list(root.find("m:cellXfs", NS))
     existing = [ET.tostring(xf) for xf in xfs]
     mapping, added = {}, []
@@ -185,6 +218,39 @@ def _iso_date_variants(styles: bytes, bases: set[int]) -> tuple[bytes, dict[int,
     return text.encode("utf-8"), mapping
 
 
+def _append_rows(text: str, name: str, rows: list[list], styles: list[int]) -> tuple[str, list[int]]:
+    """Append rows of cell values after the last used row (including merged ranges)."""
+    root = ET.fromstring(text)
+    if root.find("m:sheetProtection", NS) is not None:
+        raise WorkbookError(f"{name} 已保护，不能追加。")
+    data = root.find("m:sheetData", NS)
+    if data is None or "</sheetData>" not in text:
+        raise WorkbookError("不支持此工作表 XML 格式。")
+    last = max([2] + [int(row.get("r")) for row in data])
+    for merged in root.findall("m:mergeCells/m:mergeCell", NS):
+        last = max(last, int(re.search(r"\d+$", merged.get("ref")).group()))
+    columns = "ABCDEFGH"[:len(styles)]
+    xml_rows, numbers = [], []
+    for offset, values in enumerate(rows, 1):
+        row = last + offset
+        if row > 1048576:
+            raise WorkbookError("工作表已达到 Excel 行数上限。")
+        cells = ''.join(_cell(f'{column}{row}', value, style) for column, value, style in zip(columns, values, styles))
+        xml_rows.append(f'<row r="{row}" spans="1:{len(columns)}">{cells}</row>')
+        numbers.append(row)
+    text = text.replace("</sheetData>", ''.join(xml_rows) + "</sheetData>", 1)
+    dim = root.find("m:dimension", NS)
+    if dim is not None:
+        old_ref = dim.get("ref", "A1:H1")
+        first = old_ref.split(":")[0]
+        last_col = re.match(r"[A-Z]+", old_ref.split(":")[-1]).group()
+        if len(last_col) == 1 and last_col < columns[-1]:
+            last_col = columns[-1]
+        new_ref = f"{first}:{last_col}{last + len(rows)}"
+        text = re.sub(r'(<dimension\b[^>]*ref=")[^"]+("[^>]*/>)', lambda m: m[1] + new_ref + m[2], text, count=1)
+    return text, numbers
+
+
 def build_update(path: Path, records: list[dict], destination: Path) -> list[dict]:
     """Build a candidate file; never overwrite the source here."""
     updates = []
@@ -192,54 +258,133 @@ def build_update(path: Path, records: list[dict], destination: Path) -> list[dic
         paths, is_1904 = sheet_paths(source)
         if not all(name in paths for name in SHEETS.values()):
             raise WorkbookError("找不到模板中的 2025-S、2025-B、2025-D 工作表。")
-        changed = {}
         styles, date_style = _date_style(source.read("xl/styles.xml"))
-        changed["xl/styles.xml"] = styles
+        changed = {"xl/styles.xml": styles}
         for lift, name in SHEETS.items():
             selected = [r for r in records if r["lift"] == lift]
             if not selected:
                 continue
-            text = source.read(paths[name]).decode("utf-8")
-            root = ET.fromstring(text)
-            if root.find("m:sheetProtection", NS) is not None:
-                raise WorkbookError(f"{name} 已保护，不能追加。")
-            data = root.find("m:sheetData", NS)
-            if data is None or "</sheetData>" not in text:
-                raise WorkbookError("不支持此工作表 XML 格式。")
-            last = max([2] + [int(row.get("r")) for row in data])
-            for merged in root.findall("m:mergeCells/m:mergeCell", NS):
-                last = max(last, int(re.search(r"\d+$", merged.get("ref")).group()))
-            rows = []
-            for offset, record in enumerate(selected, 1):
-                row = last + offset
-                if row > 1048576:
-                    raise WorkbookError("工作表已达到 Excel 行数上限。")
-                values = [excel_date(record["date"], is_1904), record["exercise"], record["weight_kg"], record["reps"], record["sets"], record["max"], record["notes"], record["rpe"]]
-                cells = ''.join(_cell(f'{column}{row}', value, date_style if column == 'A' else 32) for column, value in zip('ABCDEFGH', values))
-                rows.append(f'<row r="{row}" spans="1:8">{cells}</row>')
-                updates.append({"sheet": name, "range": f"A{row}:H{row}", "record": record})
-            text = text.replace("</sheetData>", ''.join(rows) + "</sheetData>", 1)
-            dim = root.find("m:dimension", NS)
-            if dim is not None:
-                old_ref = dim.get("ref", "A1:H1")
-                first = old_ref.split(":")[0]
-                last_col = re.match(r"[A-Z]+", old_ref.split(":")[-1]).group()
-                if len(last_col) == 1 and last_col < "H":
-                    last_col = "H"
-                new_ref = f"{first}:{last_col}{last+len(selected)}"
-                text = re.sub(r'(<dimension\b[^>]*ref=")[^"]+("[^>]*/>)', lambda m: m[1]+new_ref+m[2], text, count=1)
+            values = [[excel_date(r["date"], is_1904), r["exercise"], r["weight_kg"], r["reps"], r["sets"], r["max"], r["notes"], r["rpe"]] for r in selected]
+            text, rows = _append_rows(source.read(paths[name]).decode("utf-8"), name, values, [date_style] + [32] * 7)
             changed[paths[name]] = text.encode("utf-8")
-        with ZipFile(destination, 'w') as output:
-            output.comment = source.comment
-            for entry in source.infolist():
-                output.writestr(entry, changed.get(entry.filename, source.read(entry.filename)))
+            updates += [{"sheet": name, "range": f"A{row}:H{row}", "record": record} for row, record in zip(rows, selected)]
+        _write_candidate(source, destination, changed)
     # Reopen and check every changed XML member before considering a commit.
-    with ZipFile(destination) as check:
-        if check.testzip():
-            raise WorkbookError("生成的文件未通过 ZIP 完整性校验。")
-        for member in changed:
-            ET.fromstring(check.read(member))
+    _check_candidate(destination, changed)
     return updates
+
+
+def _duration_seconds(value: str) -> int | None:
+    """Seconds in an ``h:mm:ss`` or ``mm:ss`` duration, or None when it is not one."""
+    long = re.fullmatch(r"(\d{1,2}):([0-5]\d):([0-5]\d)", value)
+    short = re.fullmatch(r"(\d{1,3}):([0-5]\d)", value)
+    if long:
+        return int(long[1]) * 3600 + int(long[2]) * 60 + int(long[3])
+    if short:
+        return int(short[1]) * 60 + int(short[2])
+    return None
+
+
+def normalize_runs(runs: list[dict]) -> list[dict]:
+    if not isinstance(runs, list) or not runs or len(runs) > 500:
+        raise WorkbookError("请提供 1–500 条跑步记录。")
+    result = []
+    for run in runs:
+        if not isinstance(run, dict):
+            raise WorkbookError("每条跑步记录必须是对象。")
+        unknown = set(run) - {"date", "distance_km", "duration", "avg_hr", "rpe", "notes"}
+        if unknown:
+            raise WorkbookError("未知字段：" + ", ".join(sorted(unknown)))
+        try:
+            day = date.fromisoformat(run["date"])
+        except (KeyError, ValueError, TypeError):
+            raise WorkbookError("日期必须是完整的 YYYY-MM-DD。") from None
+        if not 1900 <= day.year <= 2100:
+            raise WorkbookError("请检查跑步年份（支持 1900–2100）。")
+        distance = run.get("distance_km")
+        if isinstance(distance, bool) or not isinstance(distance, (int, float)) or not math.isfinite(distance) or not 0 < distance <= 1000:
+            raise WorkbookError("distance_km 必须是 0–1000 之间的公里数。")
+        duration = run.get("duration")
+        if duration is not None:
+            seconds = _duration_seconds(duration.strip()) if isinstance(duration, str) else None
+            if not seconds or seconds >= 86400:
+                raise WorkbookError("duration 必须是 h:mm:ss 或 mm:ss，且不超过 24 小时。")
+            duration = f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+        avg_hr = run.get("avg_hr")
+        if avg_hr is not None and (isinstance(avg_hr, bool) or not isinstance(avg_hr, (int, float)) or not math.isfinite(avg_hr) or not float(avg_hr).is_integer() or not 30 <= avg_hr <= 250):
+            raise WorkbookError("avg_hr 必须是 30–250 的整数，或留空。")
+        rpe = run.get("rpe")
+        if rpe is not None and (isinstance(rpe, bool) or not isinstance(rpe, (int, float)) or not math.isfinite(rpe) or not 0 <= rpe <= 10):
+            raise WorkbookError("RPE 必须是 0–10 的数字，或留空。")
+        notes = run.get("notes", "")
+        if not isinstance(notes, str) or len(notes) > 2000 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", notes):
+            raise WorkbookError("notes 必须是有效的文字，最长 2000 字。")
+        result.append({"date": day.isoformat(), "distance_km": float(distance), "duration": duration,
+                       "avg_hr": int(avg_hr) if avg_hr is not None else None, "rpe": float(rpe) if rpe is not None else None, "notes": notes.strip()})
+    return result
+
+
+def _run_sheet_xml() -> str:
+    """An empty Running sheet with title and header rows styled like the lift sheets."""
+    header = "".join(f'<c r="{column}2" s="{6 if column == "A" else 3}" t="inlineStr"><is><t>{escape(title)}</t></is></c>' for column, title in zip("ABCDEF", RUN_HEADERS))
+    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            f'<worksheet xmlns="{NS["m"]}" xmlns:r="{REL_NS}"><dimension ref="A1:F2"/>'
+            '<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>'
+            '<cols><col min="1" max="1" width="15.28515625" customWidth="1"/><col min="2" max="2" width="13.7109375" customWidth="1"/>'
+            '<col min="3" max="5" width="9.140625" customWidth="1"/><col min="6" max="6" width="26.85546875" customWidth="1"/></cols>'
+            f'<sheetData><row r="1" spans="1:6"><c r="A1" s="33" t="inlineStr"><is><t>RUNNING</t></is></c></row>'
+            f'<row r="2" spans="1:6" s="4" customFormat="1">{header}</row></sheetData>'
+            '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>')
+
+
+def _add_worksheet(source: ZipFile, changed: dict[str, bytes], name: str, sheet_xml: str) -> str:
+    """Register a new worksheet in the workbook, its relationships and content types; return its part."""
+    names = set(source.namelist())
+    workbook = source.read("xl/workbook.xml").decode("utf-8")
+    if f'xmlns:r="{REL_NS}"' not in workbook or "</sheets>" not in workbook:
+        raise WorkbookError("工作簿结构不支持自动添加工作表。")
+    rels = source.read("xl/_rels/workbook.xml.rels").decode("utf-8")
+    types = source.read("[Content_Types].xml").decode("utf-8")
+    sheet_ids = [int(sheet.get("sheetId")) for sheet in ET.fromstring(workbook.encode("utf-8")).findall("m:sheets/m:sheet", NS)]
+    rel_numbers = [int(number) for number in re.findall(r'Id="rId(\d+)"', rels)]
+    number = 1
+    while f"xl/worksheets/sheet{number}.xml" in names:
+        number += 1
+    part, rel_id = f"xl/worksheets/sheet{number}.xml", f"rId{max(rel_numbers + [0]) + 1}"
+    workbook = workbook.replace("</sheets>", f'<sheet name="{escape(name)}" sheetId="{max(sheet_ids + [0]) + 1}" r:id="{rel_id}"/></sheets>', 1)
+    rels = rels.replace("</Relationships>", f'<Relationship Id="{rel_id}" Type="{REL_NS}/worksheet" Target="worksheets/sheet{number}.xml"/></Relationships>', 1)
+    types = types.replace("</Types>", f'<Override PartName="/{part}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>', 1)
+    changed.update({"xl/workbook.xml": workbook.encode("utf-8"), "xl/_rels/workbook.xml.rels": rels.encode("utf-8"),
+                    "[Content_Types].xml": types.encode("utf-8"), part: sheet_xml.encode("utf-8")})
+    if "docProps/app.xml" in names:
+        app = source.read("docProps/app.xml").decode("utf-8")
+        # Keep the document summary's sheet list in step when it lists worksheets only.
+        if '<HeadingPairs><vt:vector size="2"' in app and "<vt:lpstr>Worksheets</vt:lpstr>" in app:
+            app = re.sub(r"(<vt:lpstr>Worksheets</vt:lpstr></vt:variant><vt:variant><vt:i4>)(\d+)", lambda m: m[1] + str(int(m[2]) + 1), app, count=1)
+            app = re.sub(r'(<TitlesOfParts><vt:vector size=")(\d+)("[^>]*>.*?)(</vt:vector>)', lambda m: m[1] + str(int(m[2]) + 1) + m[3] + f"<vt:lpstr>{escape(name)}</vt:lpstr>" + m[4], app, count=1, flags=re.S)
+            changed["docProps/app.xml"] = app.encode("utf-8")
+    return part
+
+
+def build_run_update(path: Path, runs: list[dict], destination: Path) -> list[dict]:
+    """Append runs to the Running sheet, creating that sheet on first use."""
+    with ZipFile(path) as source:
+        paths, is_1904 = sheet_paths(source)
+        changed = {}
+        part = paths[RUN_SHEET] if RUN_SHEET in paths else _add_worksheet(source, changed, RUN_SHEET, _run_sheet_xml())
+        styles, date_style = _date_style(source.read("xl/styles.xml"))
+        styles, time_styles = _number_format_variants(styles, {32}, "[h]:mm:ss")
+        changed["xl/styles.xml"] = styles
+        text = (changed[part] if part in changed else source.read(part)).decode("utf-8")
+        values = [[excel_date(r["date"], is_1904), r["distance_km"], _duration_seconds(r["duration"]) / 86400 if r["duration"] else None, r["avg_hr"], r["rpe"], r["notes"]] for r in runs]
+        text, rows = _append_rows(text, RUN_SHEET, values, [date_style, 32, time_styles[32], 32, 32, 32])
+        changed[part] = text.encode("utf-8")
+        _write_candidate(source, destination, changed)
+    _check_candidate(destination, changed)
+    with ZipFile(destination) as check:
+        if RUN_SHEET not in sheet_paths(check)[0]:
+            raise WorkbookError("生成的文件中没有 Running 工作表。")
+    return [{"sheet": RUN_SHEET, "range": f"A{row}:F{row}", "record": run} for row, run in zip(rows, runs)]
 
 
 def _text_of(cell: str, strings: list[str]) -> str:
@@ -264,10 +409,15 @@ def _find_cell(text: str, ref: str):
 
 
 def _write_candidate(source: ZipFile, destination: Path, changed: dict[str, bytes]):
+    """Copy every archive member, replacing changed ones; members new to the archive go last."""
+    names = set(source.namelist())
     with ZipFile(destination, "w") as output:
         output.comment = source.comment
         for entry in source.infolist():
             output.writestr(entry, changed.get(entry.filename, source.read(entry.filename)))
+        for name, data in changed.items():
+            if name not in names:
+                output.writestr(ZipInfo(name, date_time=datetime.now().timetuple()[:6]), data, compress_type=ZIP_DEFLATED)
 
 
 def _check_candidate(destination: Path, members):
@@ -416,8 +566,15 @@ def _history(state: Path, current_hash: str) -> list[dict]:
 
 
 def append_records(path: Path | str, records: list[dict], *, dry_run: bool = False, request_id: str | None = None, allow_duplicate: bool = False) -> dict:
-    path = Path(path).resolve()
-    records = normalize_records(records)
+    return _append(Path(path).resolve(), normalize_records(records), build_update, dry_run, request_id, allow_duplicate)
+
+
+def append_runs(path: Path | str, runs: list[dict], *, dry_run: bool = False, request_id: str | None = None, allow_duplicate: bool = False) -> dict:
+    """Append runs to the Running sheet (created on first use), with the same safety as lift records."""
+    return _append(Path(path).resolve(), normalize_runs(runs), build_run_update, dry_run, request_id, allow_duplicate)
+
+
+def _append(path: Path, records: list[dict], build, dry_run: bool, request_id: str | None, allow_duplicate: bool) -> dict:
     fingerprint = digest(json.dumps(records, ensure_ascii=False, sort_keys=True).encode('utf-8'))
     request_id = request_id or fingerprint
     if not path.is_file():
@@ -439,7 +596,7 @@ def append_records(path: Path | str, records: list[dict], *, dry_run: bool = Fal
         os.close(fd)
         candidate = Path(temp_name)
         try:
-            updates = build_update(path, records, candidate)
+            updates = build(path, records, candidate)
             if dry_run:
                 return {"status": "preview", "workbook": str(path), "updates": updates}
             backup = _commit(path, before, before_hash, state, candidate, {"action": "append", "request_id": request_id, "fingerprint": fingerprint, "updates": updates})

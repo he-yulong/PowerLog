@@ -13,6 +13,7 @@
 2. 常见格式：`python -m powerlog add --text '深蹲 140kg 5次×3组 RPE8' --today YYYY-MM-DD`。日期基准使用当前用户上下文的 Australia/Sydney 日期，勿固定复用示例日期。
 3. 自由表达由助手解析成 JSON 数组，再用 `python -m powerlog add --json <临时文件>` 或 `--json -` 写入。字段：`date`、`lift`（S/B/D）、`exercise`、`weight_kg`、`reps`、`sets`、可选 `rpe`、`notes`、`max`。临时文件放 `.powerlog-runtime/`。
    - `exercise` 一律用英文，沿用表中已有写法：Comp Squat、High-bar Squat、Pause Squat、Pin Squat、Front Squat、Comp Bench、Pause Bench、Larsen Bench、Spoto Press、Dumbbell Bench、Comp Deadlift、Conv Deadlift、Pause Deadlift、RDL 等。只说“深蹲/卧推/硬拉”时，默认对应 Comp Squat/Comp Bench/Comp Deadlift。中文只用于聊天讨论，不写入 Excel。表中没有的新动作，用简洁的英文名称并在回执中说明。
+   - 跑步用 `python -m powerlog add-run --json <文件>`：字段 `date`、`distance_km`（必填，公里），可选 `duration`（`h:mm:ss` 或 `mm:ss`）、`avg_hr`、`rpe`、`notes`。用户说了什么就记什么，没说的留空，不编造。给的是英里时换算成公里，并在回执里说明。
 4. 无日期默认当地今天，无单位默认公斤，并在回执展示。`140×5×3` 为重量×次数×组数。用户确认（2026-10-12）：只有两个数字的 `167.5*2` 是重量×次数，记 1 组；只写重量的 `147.5@10` 是单次，记 1 次 × 1 组；`@9` 是 RPE；`9.15` 这类日期是月.日，年份取最近一个不晚于今天的日期。缺少组数、次数或动作等实质歧义先问清，不猜测。
 5. 不把计划、示例、疑问或讨论作为完成训练；不编造 RPE、备注、PR 或成绩。不同重量/次数拆成多条。
 6. 成功后回复日期、动作、重量、次数×组数和工作表。重复提示如实报告，只有用户明确是另一批相同训练才用 `--allow-duplicate`。
@@ -23,6 +24,7 @@
 
 - 表：`2025-S` 深蹲、`2025-B` 卧推、`2025-D` 硬拉，名称不限制训练年份。
 - 列：A日期 B动作 C重量kg D次数 E组数 F人工Max/PR G备注 H RPE。
+- `Running` 表记录跑步，2026-10-12 应用户要求新增，第一次记跑步时由 `add-run` 自动创建。列：A日期 B距离km C用时（`[h]:mm:ss`）D平均心率 E RPE F备注。网页的跑步板块显示总里程、最近 4 周、每周里程和跑步明细；跑步不计入力量训练的训练日、组数和训练量。
 - 末尾追加，保留历史行、合并区域和样式。F未明确提供时留空，估算1RM只在前端展示。
 - 用户已确认历史日期基本按由旧到新追加，并授权结合前后顺序推断真实日期。前端兼容日/月/年文本，对旧Excel日期按顺序唯一推断日月倒置和异常年份；无法唯一确定时标注待确认。新ISO格式日期保持明确含义，补录不得破坏历史推断。页面展示校正明细。
 - 2026-10-12 应用户要求，已把三张表全部 759 个旧日期在 Excel 里改成明确的 `yyyy-mm-dd` 真实日期：90 个日月颠倒或年份错误已改正，120 个文字日期转成了日期，其余只改显示格式。改前文件备份在 `.powerlog/HylPowerliftingTraining.xlsx/20261011T132734566452Z-c4094ba6.xlsx`。逐条核对过，1,626 条记录的日期与改前网页推断的结果完全一致。现在 Excel 里已经没有需要推断的日期；推断逻辑保留，只用于以后手动在 Excel 里输入的其他格式日期。

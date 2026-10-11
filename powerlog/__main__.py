@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from .parser import ParseError, parse_training
-from .workbook import WorkbookError, append_records, rename_exercise, set_dates, undo_last
+from .workbook import WorkbookError, append_records, append_runs, rename_exercise, set_dates, undo_last
 
 
 def _read_json(source: Path):
@@ -36,6 +36,11 @@ def main():
     append.add_argument('--dry-run', action='store_true', help='仅预览目标单元格，不修改工作簿')
     append.add_argument('--request-id', help='调用方请求 ID，避免重复写入')
     append.add_argument('--allow-duplicate', action='store_true', help='明确确认这是另一批相同训练时使用')
+    run = commands.add_parser('add-run', help='追加跑步记录到 Running 工作表（第一次使用时自动创建）')
+    run.add_argument('--json', type=Path, required=True, help='[{"date","distance_km","duration","avg_hr","rpe","notes"}] 数组文件；- 表示标准输入。只有 date 和 distance_km 必填')
+    run.add_argument('--dry-run', action='store_true', help='仅预览目标单元格，不修改工作簿')
+    run.add_argument('--request-id', help='调用方请求 ID，避免重复写入')
+    run.add_argument('--allow-duplicate', action='store_true', help='明确确认这是另一次相同的跑步时使用')
     rename = commands.add_parser('rename-exercise', help='更正已有行的动作名（B列），只改当前值等于 --from 的单元格')
     rename.add_argument('--sheet', required=True, help='工作表，如 2025-B')
     rename.add_argument('--rows', required=True, type=_rows, help='行号，如 55-59 或 55,58；合并单元格按首行修改')
@@ -52,6 +57,8 @@ def main():
             result = undo_last(args.workbook)
         elif args.command == 'rename-exercise':
             result = rename_exercise(args.workbook, args.sheet, args.rows, args.old, args.new, dry_run=args.dry_run)
+        elif args.command == 'add-run':
+            result = append_runs(args.workbook, _read_json(args.json), dry_run=args.dry_run, request_id=args.request_id, allow_duplicate=args.allow_duplicate)
         elif args.command == 'set-dates':
             result = set_dates(args.workbook, _read_json(args.json), dry_run=args.dry_run)
         else:

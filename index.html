@@ -21,6 +21,7 @@
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
     <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8m-8 4h8"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-run" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
   </svg>
 
   <aside class="sidebar">
@@ -29,6 +30,7 @@
     <nav aria-label="主导航">
       <a class="nav-link active" href="#overview"><svg><use href="#i-grid"/></svg>训练概览<span class="nav-dot"></span></a>
       <a class="nav-link" href="#progress"><svg><use href="#i-trend"/></svg>力量趋势</a>
+      <a class="nav-link" href="#running"><svg><use href="#i-run"/></svg>跑步</a>
       <a class="nav-link" href="#history"><svg><use href="#i-book"/></svg>训练日志</a>
     </nav>
     <div class="sidebar-note"><span class="tiny-label">ONE REP AT A TIME</span><p>每一次举起，<br>都有迹可循。</p><div class="plate-art" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div></div>
@@ -50,6 +52,8 @@
 
       <aside class="panel rhythm-panel" aria-labelledby="rhythm-title"><div class="eyebrow muted">SHOW UP. GET STRONGER.</div><h2 id="rhythm-title">把坚持变成习惯</h2><div class="rhythm-number"><strong id="session-count">—</strong><span>个训练日</span></div><p class="rhythm-description" id="rhythm-period">你所选日期范围内的训练足迹</p><div id="activity" class="activity-grid" aria-label="最近十二周训练活动"></div><div class="activity-legend"><span>近 12 周 · 截至最新记录</span><div>少 <i></i><i></i><i></i> 多</div></div><div class="rhythm-bottom"><div><span>累计训练量</span><strong id="total-volume">—<small> t</small></strong></div><div><span>有效工作组</span><strong id="total-sets">—<small> 组</small></strong></div></div><div class="consistency-note"><svg><use href="#i-check"/></svg><span>不急于一时，专注下一组。</span></div></aside>
     </div>
+
+    <section id="running" class="panel running-panel" aria-labelledby="running-title"><div class="panel-heading"><div><div class="eyebrow muted">KEEP MOVING</div><h2 id="running-title">跑步</h2></div><span class="subtle-label">全部跑步记录 · 每周从周一开始</span></div><div class="run-body"><div class="run-stats"><div><span>总里程</span><strong id="run-total">—<small> km</small></strong></div><div><span>最近 4 周</span><strong id="run-recent">—<small> km</small></strong></div><div><span>跑步次数</span><strong id="run-count">—<small> 次</small></strong></div><div><span>最长一次</span><strong id="run-longest">—<small> km</small></strong></div></div><div class="run-chart-heading"><strong>每周里程</strong><span>最近 12 周</span></div><div id="run-chart" class="run-chart" aria-live="polite"></div></div><div class="table-container"><table><thead><tr><th scope="col">日期</th><th scope="col">距离</th><th scope="col">用时</th><th scope="col">配速</th><th scope="col">平均心率</th><th scope="col">RPE</th><th scope="col">备注</th></tr></thead><tbody id="runs"></tbody></table></div><div class="table-footer"><span id="run-table-description">跑步记录来自 Excel 的 Running 表</span><button id="show-more-runs" class="text-button" type="button" hidden>查看更多跑步<svg><use href="#i-arrow"/></svg></button></div></section>
 
     <section id="history" class="panel history-panel" aria-labelledby="history-title"><div class="panel-heading"><div><div class="eyebrow muted">THE TRAINING LOG</div><h2 id="history-title">每一组，都算数</h2></div><div class="history-actions"><span id="record-count">0 条记录</span><label class="sr-only" for="record-lift">筛选训练记录项目</label><select id="record-lift"><option value="all">全部项目</option><option value="squat">深蹲</option><option value="bench">卧推</option><option value="deadlift">硬拉</option></select></div></div><div class="table-container"><table><thead><tr><th scope="col">训练日期</th><th scope="col">项目 / 动作</th><th scope="col">重量</th><th scope="col">次数 × 组数</th><th scope="col">RPE</th><th scope="col">训练量</th><th scope="col">备注</th></tr></thead><tbody id="records"></tbody></table></div><div class="table-footer"><span id="table-description">原始记录来自你的 Excel 工作簿</span><div class="rpe-legend" aria-label="RPE 颜色说明">RPE <span class="rpe-badge easy" title="RPE 6.5 及以下 · 轻松">&lt;7</span><span class="rpe-badge moderate" title="RPE 7–7.5 · 中等">7</span><span class="rpe-badge hard" title="RPE 8–8.5 · 吃力">8</span><span class="rpe-badge very-hard" title="RPE 9–9.5 · 很吃力">9</span><span class="rpe-badge max" title="RPE 10 · 极限">10</span></div><button id="show-more" class="text-button" type="button" hidden>查看更多记录<svg><use href="#i-arrow"/></svg></button></div></section>
 

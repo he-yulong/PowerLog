@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id);
   const snapshotMode = document.querySelector('meta[name="powerlog-data-source"]')?.content === 'snapshot';
   const names = { squat: ['深蹲', 'SQUAT'], bench: ['卧推', 'BENCH PRESS'], deadlift: ['硬拉', 'DEADLIFT'] };
-  const state = { records: [], warnings: [], dateCorrections: [], lift: 'squat', metric: 'weight', range: 'all', recordLift: 'all', limit: 10, handle: null, source: null, busy: false, loaded: false };
+  const state = { records: [], runs: [], warnings: [], dateCorrections: [], lift: 'squat', metric: 'weight', range: 'all', recordLift: 'all', limit: 10, runLimit: 8, handle: null, source: null, busy: false, loaded: false };
   const number = (value, digits = 1) => value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('zh-CN', { maximumFractionDigits: digits });
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
@@ -137,6 +137,51 @@
     $('show-more').hidden = records.length <= state.limit;
     $('table-description').textContent = records.length ? `已显示 ${shown.length} / ${records.length} 条 · 日期明确的记录优先，按日期倒序` : '原始记录来自你的 Excel 工作簿';
   }
+  const clock = seconds => {
+    if (seconds == null) return '—';
+    const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = String(Math.round(seconds % 60)).padStart(2, '0');
+    return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
+  };
+  const pace = seconds => { const total = Math.round(seconds); return `${Math.floor(total / 60)}'${String(total % 60).padStart(2, '0')}"`; };
+  const weekStart = date => { const day = new Date(date + 'T00:00:00Z'); return new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10); };
+  function renderRunChart(runs) {
+    const chart = $('run-chart');
+    if (!runs.length) { chart.innerHTML = `<div class="chart-empty">${icon('run')}${state.loaded ? '还没有跑步记录' : '载入记录后显示每周里程'}<span>记录第一次跑步后，这里显示每周里程</span></div>`; return; }
+    const today = localDay(new Date()), latest = runs.map(run => run.date).sort().at(-1);
+    const end = Date.parse(weekStart(latest > today ? latest : today) + 'T00:00:00Z');
+    const weeks = Array.from({ length: 12 }, (_, index) => new Date(end - (11 - index) * 7 * 86400000).toISOString().slice(0, 10));
+    const totals = new Map(weeks.map(week => [week, 0]));
+    for (const run of runs) { const week = weekStart(run.date); if (totals.has(week)) totals.set(week, totals.get(week) + run.distance); }
+    const values = weeks.map(week => totals.get(week));
+    const width = 640, height = 160, side = 6, top = 24, bottom = 24, plotHeight = height - top - bottom;
+    const slot = (width - side * 2) / weeks.length, barWidth = Math.min(30, slot * .58), maximum = Math.max(...values, 1);
+    const bars = weeks.map((week, index) => {
+      const value = values[index], barHeight = value / maximum * plotHeight, x = side + slot * index + (slot - barWidth) / 2, y = top + plotHeight - barHeight, center = (x + barWidth / 2).toFixed(1);
+      const label = (weeks.length - 1 - index) % 2 === 0 ? `<text x="${center}" y="${height - 6}" text-anchor="middle">${week.slice(5).replace('-', '.')}</text>` : '';
+      return `<rect class="bar${index === weeks.length - 1 ? ' current' : ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="3"><title>${week} 起这一周：${number(value)} km</title></rect>${value ? `<text class="bar-value" x="${center}" y="${(y - 6).toFixed(1)}" text-anchor="middle">${number(value)}</text>` : ''}${label}`;
+    }).join('');
+    chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="最近 12 周每周跑步里程，最高一周 ${number(Math.max(...values))} km"><line class="baseline" x1="${side}" x2="${width - side}" y1="${top + plotHeight}" y2="${top + plotHeight}"/>${bars}</svg>`;
+  }
+  function renderRuns() {
+    const runs = state.runs.filter(run => run.valid && run.date);
+    const distance = list => list.reduce((total, run) => total + run.distance, 0);
+    const today = localDay(new Date()), recentStart = new Date(Date.parse(today + 'T00:00:00Z') - 27 * 86400000).toISOString().slice(0, 10);
+    const stat = (id, value, unit) => { $(id).innerHTML = `${runs.length ? value : '—'}<small> ${unit}</small>`; };
+    stat('run-total', number(distance(runs)), 'km');
+    stat('run-recent', number(distance(runs.filter(run => run.date >= recentStart && run.date <= today))), 'km');
+    stat('run-count', number(runs.length, 0), '次');
+    stat('run-longest', number(Math.max(0, ...runs.map(run => run.distance))), 'km');
+    renderRunChart(runs);
+    const sorted = state.runs.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.row - a.row);
+    const shown = sorted.slice(0, state.runLimit);
+    $('runs').innerHTML = shown.length ? shown.map(run => {
+      const date = run.date ? run.date.replaceAll('-', '.') : escape(run.dateRaw || '未填写日期');
+      const issues = run.issues.length ? `<span class="data-issue">${escape(run.issues.join('；'))}</span>` : '';
+      return `<tr><td class="date-cell">${date}</td><td class="weight-cell">${run.distance == null ? '—' : number(run.distance, 2)}<small>km</small></td><td>${clock(run.seconds)}</td><td>${run.pace ? `${pace(run.pace)}<small> /km</small>` : '—'}</td><td>${run.avgHr ?? '—'}</td><td>${run.rpeRaw ? `<span class="rpe-badge ${rpeBand(run.rpe)}">${escape(run.rpeRaw)}</span>` : '—'}</td><td class="note-cell">${escape(run.note || '—')}${issues}</td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="empty-table"><strong>${state.loaded ? '还没有跑步记录' : '跑步记录会显示在这里'}</strong>在聊天里发“10.11 跑步 12km”，就会记到 Excel 的 Running 表。</td></tr>`;
+    $('show-more-runs').hidden = sorted.length <= state.runLimit;
+    $('run-table-description').textContent = sorted.length ? `已显示 ${shown.length} / ${sorted.length} 次 · 按日期倒序` : '跑步记录来自 Excel 的 Running 表';
+  }
   function renderQuality() {
     $('data-quality').hidden = !state.warnings.length && !state.dateCorrections.length;
     const invalid = state.records.filter(record => !record.valid).length;
@@ -151,23 +196,26 @@
     $('date-correction-list').innerHTML = state.dateCorrections.map(correction => `<li><strong>${escape(correction.sheet)} · A${correction.row}</strong>：${escape(correction.from)} → ${escape(correction.to)}<span>（${escape(correction.reason)}）</span></li>`).join('');
     $('quality-list').innerHTML = state.warnings.map(warning => `<li>${escape(warning.sheet)}${warning.row ? ` · 第 ${warning.row} 行` : ''}：${escape(warning.message)}</li>`).join('');
   }
-  function render() { renderCards(); renderChart(); renderRhythm(); renderRecords(); renderQuality(); }
+  function render() { renderCards(); renderChart(); renderRhythm(); renderRuns(); renderRecords(); renderQuality(); }
   async function loadBuffer(buffer, name, source) {
     const workbook = await window.PowerLogXlsx.readWorkbook(buffer);
     loadData(workbook, name, source);
   }
   function loadData(workbook, name, source) {
     state.records = workbook.records;
+    state.runs = workbook.runs || [];
     state.warnings = workbook.warnings;
     state.dateCorrections = workbook.dateCorrections || [];
     state.loaded = true;
     state.source = source;
     state.limit = 10;
+    state.runLimit = 8;
+    const counts = `${workbook.sheets.length} 张工作表 · ${workbook.records.length} 条记录${state.runs.length ? ` · ${state.runs.length} 次跑步` : ''}`;
     $('source-name').textContent = name;
     $('source-status').textContent = source === 'snapshot' ? '已发布副本' : '已读取';
     $('source-status').classList.remove('error');
-    $('source-detail').textContent = `${workbook.sheets.length} 张工作表 · ${workbook.records.length} 条记录 · ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 读取${state.dateCorrections.length ? ` · 已统一 ${state.dateCorrections.length} 处历史日期` : ''}${source === 'file' ? ' · 更新后请重新选择文件' : ''}`;
-    if (source === 'snapshot') $('source-detail').textContent = `${workbook.sheets.length} 张工作表 · ${workbook.records.length} 条记录 · 数据生成于 ${new Date(workbook.generatedAt).toLocaleString('zh-CN', { timeZone: 'Australia/Sydney', hour12: false })}（悉尼）`;
+    $('source-detail').textContent = `${counts} · ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 读取${state.dateCorrections.length ? ` · 已统一 ${state.dateCorrections.length} 处历史日期` : ''}${source === 'file' ? ' · 更新后请重新选择文件' : ''}`;
+    if (source === 'snapshot') $('source-detail').textContent = `${counts} · 数据生成于 ${new Date(workbook.generatedAt).toLocaleString('zh-CN', { timeZone: 'Australia/Sydney', hour12: false })}（悉尼）`;
     setNotice();
     render();
   }
@@ -201,7 +249,7 @@
         const response = await fetch(new URL('training-data.json', window.location.href), { cache: 'no-store' });
         if (!response.ok) throw new Error(`训练数据未能加载（HTTP ${response.status}），请稍后刷新。`);
         const workbook = await response.json();
-        if (workbook.schemaVersion !== 1 || !Array.isArray(workbook.records) || !Array.isArray(workbook.sheets) || !Array.isArray(workbook.warnings) || !Number.isFinite(Date.parse(workbook.generatedAt))) throw new Error('训练数据格式无效，请重新发布页面。');
+        if (workbook.schemaVersion !== 1 || !Array.isArray(workbook.records) || !Array.isArray(workbook.sheets) || !Array.isArray(workbook.warnings) || (workbook.runs != null && !Array.isArray(workbook.runs)) || !Number.isFinite(Date.parse(workbook.generatedAt))) throw new Error('训练数据格式无效，请重新发布页面。');
         loadData(workbook, 'HylPowerliftingTraining.xlsx · 私人网页副本', 'snapshot');
         state.handle = null;
         return;
@@ -247,6 +295,7 @@
   ['date-start', 'date-end'].forEach(id => $(id).addEventListener('change', () => { state.limit = 10; renderChart(); renderRhythm(); renderRecords(); }));
   $('record-lift').addEventListener('change', event => { state.recordLift = event.target.value; state.limit = 10; renderRecords(); });
   $('show-more').addEventListener('click', () => { state.limit += 20; renderRecords(); });
+  $('show-more-runs').addEventListener('click', () => { state.runLimit += 20; renderRuns(); });
   document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', () => { document.querySelectorAll('.nav-link').forEach(other => other.classList.toggle('active', other === link)); }));
   render();
   if (location.protocol === 'file:') {

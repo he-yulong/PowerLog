@@ -9,6 +9,8 @@
   // Partial-range variants such as "Pin Squat (high)" move more than the full lift,
   // so they count toward volume but not toward best weight or estimated 1RM.
   const PARTIAL_RANGE = /\(high\)|\bhalf\b|\bquarter\b|\bpartial\b|\brack pulls?\b|\bblock pulls?\b|\bboard press\b/i;
+  // Runs live in their own sheet: A date, B distance km, C time, D average heart rate, E RPE, F notes.
+  const RUN_SHEET = 'Running';
   function fail(message) { throw new Error(message); }
   const nodes = (element, name) => Array.from(element.getElementsByTagNameNS('*', name));
   const textAt = (element, name) => nodes(element, name)[0]?.textContent ?? '';
@@ -306,6 +308,40 @@
     return { records, warnings, dateCorrections: inferred.dateCorrections.map(correction => ({ sheet, ...correction })) };
   }
 
+  // A run's time: an Excel time value (fraction of a day) or text such as 45:10 or 1:02:30.
+  function durationSeconds(value) {
+    if (typeof value === 'number') return Number.isFinite(value) && value > 0 && value < 1 ? Math.round(value * 86400) : null;
+    const text = String(value ?? '').trim();
+    const long = /^(\d{1,2}):([0-5]\d):([0-5]\d)$/.exec(text), short = /^(\d{1,3}):([0-5]\d)$/.exec(text);
+    if (long) return Number(long[1]) * 3600 + Number(long[2]) * 60 + Number(long[3]);
+    if (short) return Number(short[1]) * 60 + Number(short[2]);
+    return null;
+  }
+
+  function runsFromRows(rows, date1904 = false) {
+    const runs = [], warnings = [];
+    for (const { row, values } of rows) {
+      if (row <= 2 || !values.slice(0, 6).some(value => value !== '' && value != null)) continue;
+      const [dateRaw, distanceRaw, timeRaw, heartRaw, rpeRaw, note] = values;
+      const parsed = parseDate(dateRaw, date1904);
+      const distance = numeric(distanceRaw);
+      const valid = distance != null && distance > 0;
+      const hasTime = timeRaw !== '' && timeRaw != null;
+      const seconds = hasTime ? durationSeconds(timeRaw) : null;
+      const issues = [];
+      if (!valid) issues.push('距离缺失或无效');
+      if (parsed.reason) issues.push(parsed.reason);
+      if (hasTime && seconds == null) issues.push('用时格式无效');
+      runs.push({
+        id: `${RUN_SHEET}:${row}`, row, sheet: RUN_SHEET, date: parsed.date, dateRaw: String(dateRaw ?? ''),
+        distance: valid ? distance : null, seconds, pace: valid && seconds ? seconds / distance : null,
+        avgHr: numeric(heartRaw), rpe: numeric(rpeRaw), rpeRaw: String(rpeRaw ?? ''), note: String(note ?? ''), valid, issues
+      });
+      if (issues.length) warnings.push({ sheet: RUN_SHEET, row, message: issues.join('；') });
+    }
+    return { runs, warnings };
+  }
+
   function sheetRows(document, strings, numberFormats = []) {
     const cells = new Map();
     const dateMetadata = new Map();
@@ -367,14 +403,21 @@
       if (formats) numberFormats = nodes(formats, 'xf').map(format => customFormats.get(Number(format.getAttribute('numFmtId'))) || '');
     }
     const date1904 = ['1', 'true'].includes(nodes(workbook, 'workbookPr')[0]?.getAttribute('date1904'));
-    const records = [], warnings = [], sheets = [], dateCorrections = [];
+    const records = [], runs = [], warnings = [], sheets = [], dateCorrections = [];
     for (const sheet of nodes(workbook, 'sheet')) {
       const name = sheet.getAttribute('name');
-      if (!lifts[name]) continue;
+      if (!lifts[name] && name !== RUN_SHEET) continue;
       const id = sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || sheet.getAttribute('r:id');
       const relation = rels.get(id);
       if (!relation) fail(`工作表 ${name} 缺少文件关系。`);
-      const result = recordsFromRows(sheetRows(xml(await zip.read(relation.path)), strings, numberFormats), name, date1904);
+      const rows = sheetRows(xml(await zip.read(relation.path)), strings, numberFormats);
+      if (name === RUN_SHEET) {
+        const result = runsFromRows(rows, date1904);
+        runs.push(...result.runs);
+        warnings.push(...result.warnings);
+        continue;
+      }
+      const result = recordsFromRows(rows, name, date1904);
       records.push(...result.records);
       warnings.push(...result.warnings);
       dateCorrections.push(...result.dateCorrections);
@@ -382,7 +425,7 @@
     }
     if (!sheets.length) fail('没有找到力量举工作表。请使用包含 2025-S、2025-B、2025-D 的训练工作簿。');
     for (const name of Object.keys(lifts)) if (!sheets.includes(name)) warnings.push({ sheet: name, row: null, message: '未找到此工作表' });
-    return { records, warnings, sheets, date1904, dateCorrections };
+    return { records, runs, warnings, sheets, date1904, dateCorrections };
   }
-  root.PowerLogXlsx = Object.freeze({ readWorkbook, parseDate, inferDateSequence, recordsFromRows, isoNumberFormat, unzip });
+  root.PowerLogXlsx = Object.freeze({ readWorkbook, parseDate, inferDateSequence, recordsFromRows, runsFromRows, isoNumberFormat, unzip });
 })(typeof window !== 'undefined' ? window : globalThis);

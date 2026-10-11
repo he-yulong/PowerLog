@@ -12,6 +12,8 @@
 硬拉 180kg 2次×3组 备注：最后一组较慢
 ```
 
+跑步也可以记录，例如 `10.11 跑步 12km`，写入同一个 Excel 的 `Running` 表。距离必填，用时、平均心率、RPE、备注可以不写。
+
 助手调用本地工具更新 `HylPowerliftingTraining.xlsx` 并回复结果。没有日期时使用澳大利亚悉尼当天，没有单位时使用公斤。`140×5×3` 表示重量×次数×组数，RPE和备注可以不填。聊天由助手理解，没有后台监听服务；`AGENTS.md` 保存以后继续录入的项目约定。
 
 ## 浏览器可视化
@@ -57,6 +59,9 @@ python -m powerlog add --text '今天 深蹲 140kg 5次×3组 RPE8'
 
 # 相对日期基准由聊天上下文确定
 python -m powerlog add --text '昨天 卧推 90kg 3次×4组' --today 2026-10-05
+
+# 记录跑步（第一次使用时自动创建 Running 表）
+python -m powerlog add-run --json runs.json   # [{"date":"2026-10-11","distance_km":12,"duration":"1:02:30"}]
 
 # 更正已有行的动作名（先 --dry-run 预览）
 python -m powerlog rename-exercise --sheet 2025-B --rows 55-59 --from 'Comp Deadlift' --to 'Comp Bench' --dry-run

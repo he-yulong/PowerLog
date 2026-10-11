@@ -326,6 +326,51 @@ class WorkbookSafetyTests(unittest.TestCase):
             self.assertEqual(self.path.read_bytes(), self.original)
         self.assertFalse(self.state().exists())
 
+    def run_rows(self):
+        runs = read_rows(self.path)["runs"]
+        return {row["row"]: row for row in runs["rows"]} if runs else {}
+
+    def test_add_runs_creates_one_running_sheet_keeps_lifts_and_can_be_undone(self):
+        old_members = self.members()
+        first_row = max([2] + list(self.run_rows())) + 1
+        first = workbook.append_runs(self.path, [{"date": "2026-10-11", "distance_km": 12}])
+        second = workbook.append_runs(self.path, [{"date": "2026-10-12", "distance_km": 5.5, "duration": "28:30", "avg_hr": 150, "rpe": 6, "notes": "easy <run> & stretch"}])
+        self.assertEqual([first["status"], second["status"]], ["saved", "saved"])
+        self.assertEqual([first["updates"][0]["range"], second["updates"][0]["range"]], [f"A{first_row}:F{first_row}", f"A{first_row + 1}:F{first_row + 1}"])
+        self.assertEqual(second["updates"][0]["record"]["duration"], "0:28:30")
+        with ZipFile(self.path) as archive:
+            paths, _ = workbook.sheet_paths(archive)
+            workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+            types = archive.read("[Content_Types].xml").decode("utf-8")
+            app = archive.read("docProps/app.xml").decode("utf-8")
+            new_members = {name: archive.read(name) for name in archive.namelist()}
+        self.assertEqual(workbook_xml.count('name="Running"'), 1)
+        self.assertIn(f'PartName="/{paths["Running"]}"', types)
+        self.assertEqual(app.count("<vt:lpstr>Running</vt:lpstr>"), 1)
+        for lift_sheet in ("xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet3.xml"):
+            self.assertEqual(new_members[lift_sheet], old_members[lift_sheet])
+        rows = self.run_rows()
+        self.assertEqual(rows[2]["values"][:6], list(workbook.RUN_HEADERS))
+        self.assertEqual(rows[first_row]["values"][:6], [workbook.excel_date("2026-10-11"), 12, "", "", "", ""])
+        self.assertEqual(rows[first_row]["numberFormat"], "yyyy-mm-dd")
+        self.assertEqual(rows[first_row + 1]["values"][:6], [workbook.excel_date("2026-10-12"), 5.5, (28 * 60 + 30) / 86400, 150, 6, "easy <run> & stretch"])
+        self.assertEqual(workbook.append_runs(self.path, [{"date": "2026-10-11", "distance_km": 12}])["status"], "duplicate")
+        workbook.undo_last(self.path)
+        workbook.undo_last(self.path)
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_invalid_runs_never_touch_original(self):
+        good = {"date": "2026-10-11", "distance_km": 12}
+        bad_runs = [[], [{"date": "2026-10-11"}], [{**good, "distance_km": 0}], [{**good, "distance_km": True}],
+                    [{**good, "distance_km": float("nan")}], [{**good, "duration": "1:75:00"}], [{**good, "duration": 3600}],
+                    [{**good, "avg_hr": 300}], [{**good, "avg_hr": 150.5}], [{**good, "rpe": 11}], [{**good, "pace": "5:00"}],
+                    [{**good, "date": "2026-02-30"}], [{**good, "notes": "bad\x00text"}]]
+        for runs in bad_runs:
+            with self.subTest(runs=runs), self.assertRaises(workbook.WorkbookError):
+                workbook.append_runs(self.path, runs)
+            self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertFalse(self.state().exists())
+
     def test_undo_rechecks_external_edits_before_replace(self):
         workbook.append_records(self.path, self.records)
         real_mkstemp = workbook.tempfile.mkstemp
