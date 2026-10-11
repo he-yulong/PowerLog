@@ -9,6 +9,9 @@
   const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
   const sum = (records, key) => records.reduce((total, record) => total + (record[key] ?? 0), 0);
   const max = (records, key) => records.length ? records.reduce((best, record) => Math.max(best, record[key] ?? 0), 0) : null;
+  // RPE bands, easiest to hardest; colors live in styles.css (.rpe-badge.<band>).
+  const rpeBand = rpe => rpe == null ? '' : rpe >= 10 ? 'max' : rpe >= 9 ? 'very-hard' : rpe >= 8 ? 'hard' : rpe >= 7 ? 'moderate' : 'easy';
+  const rpeLabels = { easy: '轻松', moderate: '中等', hard: '吃力', 'very-hard': '很吃力', max: '极限' };
   const localDay = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   function setNotice(message = '', error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
   function setBusy(value) { state.busy = value; $('import').disabled = value; $('refresh').disabled = value; }
@@ -129,7 +132,7 @@
       const detail = !record.date ? '<small>日期待确认</small>' : record.dateInferred ? `<small title="${escape(`${record.dateOriginal} → ${record.date}；${record.dateInference}`)}">已按顺序校正</small>` : '';
       const quantity = value => value == null || value === '' ? '—' : escape(value);
       const issues = record.issues.length ? `<span class="data-issue">${escape(record.issues.join('；'))}</span>` : '';
-      return `<tr><td class="date-cell">${date}${detail}</td><td><span class="lift-chip ${record.lift}">${names[record.lift][0]}</span>${escape(record.exercise)}</td><td class="weight-cell">${quantity(record.weightRaw)}<small>kg</small></td><td>${quantity(record.repsRaw)} <span aria-label="乘">×</span> ${quantity(record.setsRaw)}</td><td>${record.rpeRaw ? `<span class="rpe-badge">${escape(record.rpeRaw)}</span>` : '—'}</td><td>${record.valid ? `${number(record.volume)} <small>kg·次</small>` : '—'}</td><td class="note-cell">${escape(record.note || '—')}${record.manualMax ? `<span class="data-issue">原表 Max：${escape(record.manualMax)}</span>` : ''}${record.partialRange ? '<span class="data-issue">半程动作，不计入最高重量和 1RM</span>' : ''}${issues}</td></tr>`;
+      return `<tr><td class="date-cell">${date}${detail}</td><td><span class="lift-chip ${record.lift}">${names[record.lift][0]}</span>${escape(record.exercise)}</td><td class="weight-cell">${quantity(record.weightRaw)}<small>kg</small></td><td>${quantity(record.repsRaw)} <span aria-label="乘">×</span> ${quantity(record.setsRaw)}</td><td>${record.rpeRaw ? `<span class="rpe-badge ${rpeBand(record.rpe)}" title="RPE ${escape(record.rpeRaw)}${rpeBand(record.rpe) ? ` · ${rpeLabels[rpeBand(record.rpe)]}` : ''}">${escape(record.rpeRaw)}</span>` : '—'}</td><td>${record.valid ? `${number(record.volume)} <small>kg·次</small>` : '—'}</td><td class="note-cell">${escape(record.note || '—')}${record.manualMax ? `<span class="data-issue">原表 Max：${escape(record.manualMax)}</span>` : ''}${record.partialRange ? '<span class="data-issue">半程动作，不计入最高重量和 1RM</span>' : ''}${issues}</td></tr>`;
     }).join('') : `<tr><td colspan="7" class="empty-table"><strong>${state.loaded ? '当前筛选没有训练记录' : '你的下一次进步，从这里开始'}</strong>${state.loaded ? '切换项目或日期范围，看看其他训练。' : '选择 HylPowerliftingTraining.xlsx，读取你的真实训练数据。'}</td></tr>`;
     $('show-more').hidden = records.length <= state.limit;
     $('table-description').textContent = records.length ? `已显示 ${shown.length} / ${records.length} 条 · 日期明确的记录优先，按日期倒序` : '原始记录来自你的 Excel 工作簿';
