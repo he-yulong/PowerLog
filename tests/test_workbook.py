@@ -334,9 +334,9 @@ class WorkbookSafetyTests(unittest.TestCase):
         old_members = self.members()
         first_row = max([2] + list(self.run_rows())) + 1
         first = workbook.append_runs(self.path, [{"date": "2026-10-11", "distance_km": 12}])
-        second = workbook.append_runs(self.path, [{"date": "2026-10-12", "distance_km": 5.5, "duration": "28:30", "avg_hr": 150, "rpe": 6, "notes": "easy <run> & stretch"}])
+        second = workbook.append_runs(self.path, [{"date": "2026-10-12", "distance_km": 5.5, "duration": "28:30", "notes": "easy <run> & stretch"}])
         self.assertEqual([first["status"], second["status"]], ["saved", "saved"])
-        self.assertEqual([first["updates"][0]["range"], second["updates"][0]["range"]], [f"A{first_row}:F{first_row}", f"A{first_row + 1}:F{first_row + 1}"])
+        self.assertEqual([first["updates"][0]["range"], second["updates"][0]["range"]], [f"A{first_row}:D{first_row}", f"A{first_row + 1}:D{first_row + 1}"])
         self.assertEqual(second["updates"][0]["record"]["duration"], "0:28:30")
         with ZipFile(self.path) as archive:
             paths, _ = workbook.sheet_paths(archive)
@@ -350,10 +350,10 @@ class WorkbookSafetyTests(unittest.TestCase):
         for lift_sheet in ("xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet3.xml"):
             self.assertEqual(new_members[lift_sheet], old_members[lift_sheet])
         rows = self.run_rows()
-        self.assertEqual(rows[2]["values"][:6], list(workbook.RUN_HEADERS))
-        self.assertEqual(rows[first_row]["values"][:6], [workbook.excel_date("2026-10-11"), 12, "", "", "", ""])
+        self.assertEqual(rows[2]["values"][:4], list(workbook.RUN_HEADERS))
+        self.assertEqual(rows[first_row]["values"][:5], [workbook.excel_date("2026-10-11"), 12, "", "", ""])
         self.assertEqual(rows[first_row]["numberFormat"], "yyyy-mm-dd")
-        self.assertEqual(rows[first_row + 1]["values"][:6], [workbook.excel_date("2026-10-12"), 5.5, (28 * 60 + 30) / 86400, 150, 6, "easy <run> & stretch"])
+        self.assertEqual(rows[first_row + 1]["values"][:5], [workbook.excel_date("2026-10-12"), 5.5, (28 * 60 + 30) / 86400, "easy <run> & stretch", ""])
         self.assertEqual(workbook.append_runs(self.path, [{"date": "2026-10-11", "distance_km": 12}])["status"], "duplicate")
         workbook.undo_last(self.path)
         workbook.undo_last(self.path)
@@ -363,7 +363,7 @@ class WorkbookSafetyTests(unittest.TestCase):
         good = {"date": "2026-10-11", "distance_km": 12}
         bad_runs = [[], [{"date": "2026-10-11"}], [{**good, "distance_km": 0}], [{**good, "distance_km": True}],
                     [{**good, "distance_km": float("nan")}], [{**good, "duration": "1:75:00"}], [{**good, "duration": 3600}],
-                    [{**good, "avg_hr": 300}], [{**good, "avg_hr": 150.5}], [{**good, "rpe": 11}], [{**good, "pace": "5:00"}],
+                    [{**good, "avg_hr": 150}], [{**good, "rpe": 6}], [{**good, "pace": "5:00"}],
                     [{**good, "date": "2026-02-30"}], [{**good, "notes": "bad\x00text"}]]
         for runs in bad_runs:
             with self.subTest(runs=runs), self.assertRaises(workbook.WorkbookError):

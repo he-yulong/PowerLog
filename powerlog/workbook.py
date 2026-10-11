@@ -23,9 +23,9 @@ NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 RID = "{" + REL_NS + "}id"
 SHEETS = {"S": "2025-S", "B": "2025-B", "D": "2025-D"}
-# Runs live in their own sheet: A date, B distance km, C time, D average heart rate, E RPE, F notes.
+# Runs live in their own sheet: A date, B distance km, C time, D notes.
 RUN_SHEET = "Running"
-RUN_HEADERS = ("Date", "Distance (km)", "Time", "Avg HR", "RPE", "Notes")
+RUN_HEADERS = ("Date", "Distance (km)", "Time", "Notes")
 
 
 class WorkbookError(ValueError):
@@ -292,7 +292,7 @@ def normalize_runs(runs: list[dict]) -> list[dict]:
     for run in runs:
         if not isinstance(run, dict):
             raise WorkbookError("每条跑步记录必须是对象。")
-        unknown = set(run) - {"date", "distance_km", "duration", "avg_hr", "rpe", "notes"}
+        unknown = set(run) - {"date", "distance_km", "duration", "notes"}
         if unknown:
             raise WorkbookError("未知字段：" + ", ".join(sorted(unknown)))
         try:
@@ -310,30 +310,23 @@ def normalize_runs(runs: list[dict]) -> list[dict]:
             if not seconds or seconds >= 86400:
                 raise WorkbookError("duration 必须是 h:mm:ss 或 mm:ss，且不超过 24 小时。")
             duration = f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-        avg_hr = run.get("avg_hr")
-        if avg_hr is not None and (isinstance(avg_hr, bool) or not isinstance(avg_hr, (int, float)) or not math.isfinite(avg_hr) or not float(avg_hr).is_integer() or not 30 <= avg_hr <= 250):
-            raise WorkbookError("avg_hr 必须是 30–250 的整数，或留空。")
-        rpe = run.get("rpe")
-        if rpe is not None and (isinstance(rpe, bool) or not isinstance(rpe, (int, float)) or not math.isfinite(rpe) or not 0 <= rpe <= 10):
-            raise WorkbookError("RPE 必须是 0–10 的数字，或留空。")
         notes = run.get("notes", "")
         if not isinstance(notes, str) or len(notes) > 2000 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", notes):
             raise WorkbookError("notes 必须是有效的文字，最长 2000 字。")
-        result.append({"date": day.isoformat(), "distance_km": float(distance), "duration": duration,
-                       "avg_hr": int(avg_hr) if avg_hr is not None else None, "rpe": float(rpe) if rpe is not None else None, "notes": notes.strip()})
+        result.append({"date": day.isoformat(), "distance_km": float(distance), "duration": duration, "notes": notes.strip()})
     return result
 
 
 def _run_sheet_xml() -> str:
     """An empty Running sheet with title and header rows styled like the lift sheets."""
-    header = "".join(f'<c r="{column}2" s="{6 if column == "A" else 3}" t="inlineStr"><is><t>{escape(title)}</t></is></c>' for column, title in zip("ABCDEF", RUN_HEADERS))
+    header = "".join(f'<c r="{column}2" s="{6 if column == "A" else 3}" t="inlineStr"><is><t>{escape(title)}</t></is></c>' for column, title in zip("ABCD", RUN_HEADERS))
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<worksheet xmlns="{NS["m"]}" xmlns:r="{REL_NS}"><dimension ref="A1:F2"/>'
+            f'<worksheet xmlns="{NS["m"]}" xmlns:r="{REL_NS}"><dimension ref="A1:D2"/>'
             '<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>'
             '<cols><col min="1" max="1" width="15.28515625" customWidth="1"/><col min="2" max="2" width="13.7109375" customWidth="1"/>'
-            '<col min="3" max="5" width="9.140625" customWidth="1"/><col min="6" max="6" width="26.85546875" customWidth="1"/></cols>'
-            f'<sheetData><row r="1" spans="1:6"><c r="A1" s="33" t="inlineStr"><is><t>RUNNING</t></is></c></row>'
-            f'<row r="2" spans="1:6" s="4" customFormat="1">{header}</row></sheetData>'
+            '<col min="3" max="3" width="10.7109375" customWidth="1"/><col min="4" max="4" width="26.85546875" customWidth="1"/></cols>'
+            f'<sheetData><row r="1" spans="1:4"><c r="A1" s="33" t="inlineStr"><is><t>RUNNING</t></is></c></row>'
+            f'<row r="2" spans="1:4" s="4" customFormat="1">{header}</row></sheetData>'
             '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>')
 
 
@@ -376,15 +369,15 @@ def build_run_update(path: Path, runs: list[dict], destination: Path) -> list[di
         styles, time_styles = _number_format_variants(styles, {32}, "[h]:mm:ss")
         changed["xl/styles.xml"] = styles
         text = (changed[part] if part in changed else source.read(part)).decode("utf-8")
-        values = [[excel_date(r["date"], is_1904), r["distance_km"], _duration_seconds(r["duration"]) / 86400 if r["duration"] else None, r["avg_hr"], r["rpe"], r["notes"]] for r in runs]
-        text, rows = _append_rows(text, RUN_SHEET, values, [date_style, 32, time_styles[32], 32, 32, 32])
+        values = [[excel_date(r["date"], is_1904), r["distance_km"], _duration_seconds(r["duration"]) / 86400 if r["duration"] else None, r["notes"]] for r in runs]
+        text, rows = _append_rows(text, RUN_SHEET, values, [date_style, 32, time_styles[32], 32])
         changed[part] = text.encode("utf-8")
         _write_candidate(source, destination, changed)
     _check_candidate(destination, changed)
     with ZipFile(destination) as check:
         if RUN_SHEET not in sheet_paths(check)[0]:
             raise WorkbookError("生成的文件中没有 Running 工作表。")
-    return [{"sheet": RUN_SHEET, "range": f"A{row}:F{row}", "record": run} for row, run in zip(rows, runs)]
+    return [{"sheet": RUN_SHEET, "range": f"A{row}:D{row}", "record": run} for row, run in zip(rows, runs)]
 
 
 def _text_of(cell: str, strings: list[str]) -> str:

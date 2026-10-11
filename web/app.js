@@ -177,8 +177,8 @@
     $('runs').innerHTML = shown.length ? shown.map(run => {
       const date = run.date ? run.date.replaceAll('-', '.') : escape(run.dateRaw || '未填写日期');
       const issues = run.issues.length ? `<span class="data-issue">${escape(run.issues.join('；'))}</span>` : '';
-      return `<tr><td class="date-cell">${date}</td><td class="weight-cell">${run.distance == null ? '—' : number(run.distance, 2)}<small>km</small></td><td>${clock(run.seconds)}</td><td>${run.pace ? `${pace(run.pace)}<small> /km</small>` : '—'}</td><td>${run.avgHr ?? '—'}</td><td>${run.rpeRaw ? `<span class="rpe-badge ${rpeBand(run.rpe)}">${escape(run.rpeRaw)}</span>` : '—'}</td><td class="note-cell">${escape(run.note || '—')}${issues}</td></tr>`;
-    }).join('') : `<tr><td colspan="7" class="empty-table"><strong>${state.loaded ? '还没有跑步记录' : '跑步记录会显示在这里'}</strong>在聊天里发“10.11 跑步 12km”，就会记到 Excel 的 Running 表。</td></tr>`;
+      return `<tr><td class="date-cell">${date}</td><td class="weight-cell">${run.distance == null ? '—' : number(run.distance, 2)}<small>km</small></td><td>${clock(run.seconds)}</td><td>${run.pace ? `${pace(run.pace)}<small> /km</small>` : '—'}</td><td class="note-cell">${escape(run.note || '—')}${issues}</td></tr>`;
+    }).join('') : `<tr><td colspan="5" class="empty-table"><strong>${state.loaded ? '还没有跑步记录' : '跑步记录会显示在这里'}</strong>在聊天里发“10.11 跑步 12km”，就会记到 Excel 的 Running 表。</td></tr>`;
     $('show-more-runs').hidden = sorted.length <= state.runLimit;
     $('run-table-description').textContent = sorted.length ? `已显示 ${shown.length} / ${sorted.length} 次 · 按日期倒序` : '跑步记录来自 Excel 的 Running 表';
   }

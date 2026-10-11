@@ -37,7 +37,7 @@ def main():
     append.add_argument('--request-id', help='调用方请求 ID，避免重复写入')
     append.add_argument('--allow-duplicate', action='store_true', help='明确确认这是另一批相同训练时使用')
     run = commands.add_parser('add-run', help='追加跑步记录到 Running 工作表（第一次使用时自动创建）')
-    run.add_argument('--json', type=Path, required=True, help='[{"date","distance_km","duration","avg_hr","rpe","notes"}] 数组文件；- 表示标准输入。只有 date 和 distance_km 必填')
+    run.add_argument('--json', type=Path, required=True, help='[{"date","distance_km","duration","notes"}] 数组文件；- 表示标准输入。只有 date 和 distance_km 必填')
     run.add_argument('--dry-run', action='store_true', help='仅预览目标单元格，不修改工作簿')
     run.add_argument('--request-id', help='调用方请求 ID，避免重复写入')
     run.add_argument('--allow-duplicate', action='store_true', help='明确确认这是另一次相同的跑步时使用')

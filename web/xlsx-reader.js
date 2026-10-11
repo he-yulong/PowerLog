@@ -9,7 +9,7 @@
   // Partial-range variants such as "Pin Squat (high)" move more than the full lift,
   // so they count toward volume but not toward best weight or estimated 1RM.
   const PARTIAL_RANGE = /\(high\)|\bhalf\b|\bquarter\b|\bpartial\b|\brack pulls?\b|\bblock pulls?\b|\bboard press\b/i;
-  // Runs live in their own sheet: A date, B distance km, C time, D average heart rate, E RPE, F notes.
+  // Runs live in their own sheet: A date, B distance km, C time, D notes.
   const RUN_SHEET = 'Running';
   function fail(message) { throw new Error(message); }
   const nodes = (element, name) => Array.from(element.getElementsByTagNameNS('*', name));
@@ -321,8 +321,8 @@
   function runsFromRows(rows, date1904 = false) {
     const runs = [], warnings = [];
     for (const { row, values } of rows) {
-      if (row <= 2 || !values.slice(0, 6).some(value => value !== '' && value != null)) continue;
-      const [dateRaw, distanceRaw, timeRaw, heartRaw, rpeRaw, note] = values;
+      if (row <= 2 || !values.slice(0, 4).some(value => value !== '' && value != null)) continue;
+      const [dateRaw, distanceRaw, timeRaw, note] = values;
       const parsed = parseDate(dateRaw, date1904);
       const distance = numeric(distanceRaw);
       const valid = distance != null && distance > 0;
@@ -334,8 +334,7 @@
       if (hasTime && seconds == null) issues.push('用时格式无效');
       runs.push({
         id: `${RUN_SHEET}:${row}`, row, sheet: RUN_SHEET, date: parsed.date, dateRaw: String(dateRaw ?? ''),
-        distance: valid ? distance : null, seconds, pace: valid && seconds ? seconds / distance : null,
-        avgHr: numeric(heartRaw), rpe: numeric(rpeRaw), rpeRaw: String(rpeRaw ?? ''), note: String(note ?? ''), valid, issues
+        distance: valid ? distance : null, seconds, pace: valid && seconds ? seconds / distance : null, note: String(note ?? ''), valid, issues
       });
       if (issues.length) warnings.push({ sheet: RUN_SHEET, row, message: issues.join('；') });
     }
