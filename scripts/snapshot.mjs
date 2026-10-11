@@ -34,15 +34,11 @@ export async function buildSnapshot(python) {
   return snapshot;
 }
 
-// index.html switched to the published snapshot, with wording for a private hosted copy.
+// index.html switched to the published snapshot; app.js adjusts the wording for a hosted copy.
 export async function snapshotHtml() {
   const html = await readFile(path.join(root, 'index.html'), 'utf8');
-  return html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n  <meta name="powerlog-data-source" content="snapshot">')
-    .replace('你的数据，留在本地<small>Excel 驱动 · 无需账号</small>', '你的私人训练空间<small>Excel 驱动 · 仅本人访问</small>')
-    .replace('>本地工作簿</span>', '>私人网页副本</span>')
-    .replace('正在读取本地训练记录…', '正在加载已发布的训练记录…')
-    .replace('更新 Excel 后在这里刷新。', '由助手更新 Excel 并重新发布后，在这里刷新查看。电脑需在线才能完成聊天录入。')
-    .replace('数据仅在此浏览器读取 · 不上传', '私人静态页面 · 数据以最近一次发布为准');
+  if (!html.includes('<meta charset="utf-8">')) throw new Error('index.html 缺少 charset 声明，无法生成只读副本。');
+  return html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n  <meta name="powerlog-data-source" content="snapshot">');
 }
 
 export async function writeSite(directory, snapshot, html, page = 'index.html') {

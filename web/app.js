@@ -2,230 +2,572 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const snapshotMode = document.querySelector('meta[name="powerlog-data-source"]')?.content === 'snapshot';
-  const names = { squat: ['深蹲', 'SQUAT'], bench: ['卧推', 'BENCH PRESS'], deadlift: ['硬拉', 'DEADLIFT'] };
-  const state = { records: [], runs: [], warnings: [], dateCorrections: [], lift: 'squat', metric: 'weight', range: 'all', recordLift: 'all', limit: 10, runLimit: 8, handle: null, source: null, busy: false, loaded: false };
-  const number = (value, digits = 1) => value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('zh-CN', { maximumFractionDigits: digits });
+  const fileMode = location.protocol === 'file:';
+  // Identity colors follow competition plates; text always stays in the ink colors.
+  const LIFTS = [
+    { key: 'squat', name: '深蹲', color: 'var(--squat)' },
+    { key: 'bench', name: '卧推', color: 'var(--bench)' },
+    { key: 'deadlift', name: '硬拉', color: 'var(--deadlift)' }
+  ];
+  const LIFT = Object.fromEntries(LIFTS.map(lift => [lift.key, lift]));
+  const RUN_COLOR = 'var(--run)';
+  const METRICS = {
+    weight: { label: '最高重量', note: '每个训练日取最好的一组重量。包含全程杠铃变式，不含 Pin Squat (high) 等半程动作和哑铃、自重等辅助动作。' },
+    e1rm: { label: '估算 1RM', note: 'Epley 公式：重量 × (1 + 次数 ÷ 30)，单次取实际重量，每个训练日取最高值。不含半程和辅助动作，仅供训练参考，不代表比赛成绩。' },
+    volume: { label: '训练量', note: '每个训练日所有有效组的 重量 × 次数 × 组数 之和，包含变式和辅助动作。' }
+  };
+  const RANGE_LABEL = { 30: '最近 30 天', 90: '最近 90 天', 365: '最近 1 年', all: '全部时间' };
+  const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const RPE_LABEL = { easy: '轻松', moderate: '中等', hard: '吃力', 'very-hard': '很吃力', max: '极限' };
+  const DAY = 86400000;
+  const state = {
+    records: [], runs: [], warnings: [], dateCorrections: [], lift: 'squat', metric: 'weight', range: '90', logFilter: 'all', logDays: 10,
+    trendIndex: null, calendarDate: null, runWeek: null, handle: null, source: null, busy: false, loaded: false, readAt: null, generatedAt: null
+  };
+  // Inputs of the drawn charts, kept so a resize or a new selection redraws without recomputing.
+  const view = { trend: [], trendGeometry: null, weeks: [], runXs: [], calendar: new Map(), calendarFirst: null };
+
+  const fmt = (value, digits = 1) => value == null || !Number.isFinite(value) ? '—' : value.toLocaleString('zh-CN', { maximumFractionDigits: digits });
+  const tons = kg => fmt(kg / 1000, kg >= 100000 ? 0 : 1);
   const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
   const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
-  const sum = (records, key) => records.reduce((total, record) => total + (record[key] ?? 0), 0);
-  const max = (records, key) => records.length ? records.reduce((best, record) => Math.max(best, record[key] ?? 0), 0) : null;
-  // RPE bands, easiest to hardest; colors live in styles.css (.rpe-badge.<band>).
-  const rpeBand = rpe => rpe == null ? '' : rpe >= 10 ? 'max' : rpe >= 9 ? 'very-hard' : rpe >= 8 ? 'hard' : rpe >= 7 ? 'moderate' : 'easy';
-  const rpeLabels = { easy: '轻松', moderate: '中等', hard: '吃力', 'very-hard': '很吃力', max: '极限' };
-  // Best weight and estimated 1RM skip partial-range and accessory movements; volume and sets count everything.
+  const plate = color => `<svg class="plate" viewBox="0 0 20 20" aria-hidden="true" style="--plate:${color}"><circle cx="10" cy="10" r="9"/><circle class="hole" cx="10" cy="10" r="2.6"/></svg>`;
+  const time = date => Date.parse(date + 'T00:00:00Z');
+  const isoDate = ms => new Date(ms).toISOString().slice(0, 10);
+  const localToday = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; };
+  const monthDay = date => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
+  const weekday = date => WEEKDAYS[new Date(time(date)).getUTCDay()];
+  const fullDate = date => `${date.slice(0, 4)}年${monthDay(date)}`;
+  const weekStart = date => isoDate(time(date) - ((new Date(time(date)).getUTCDay() + 6) % 7) * DAY);
+  const stamp = date => date.toLocaleString('zh-CN', { timeZone: 'Australia/Sydney', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   const countsTowardBest = record => !record.partialRange && !record.accessory;
-  const localDay = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  function setNotice(message = '', error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
-  function setBusy(value) { state.busy = value; $('import').disabled = value; $('refresh').disabled = value; }
-  function dateBounds() {
-    if (state.range === 'custom') return { start: $('date-start').value, end: $('date-end').value };
-    if (state.range === 'all') return { start: '', end: '' };
-    const today = new Date(), start = new Date(today);
-    start.setDate(start.getDate() - Number(state.range) + 1);
-    return { start: localDay(start), end: localDay(today) };
-  }
-  function inRange(record) {
-    const { start, end } = dateBounds();
-    if (!start && !end) return true;
-    return Boolean(record.date && (!start || record.date >= start) && (!end || record.date <= end));
-  }
-  function daily(records, key) {
-    const days = new Map();
-    for (const record of records) {
-      if (!record.valid || !record.date || (key !== 'volume' && !countsTowardBest(record))) continue;
-      if (key === 'volume') days.set(record.date, (days.get(record.date) || 0) + record.volume);
-      else days.set(record.date, Math.max(days.get(record.date) || 0, record[key] || 0));
-    }
-    return Array.from(days, ([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date));
-  }
-  function sparkline(records) {
-    const points = daily(records, 'weight').slice(-24);
-    if (!points.length) return '<svg class="sparkline" aria-hidden="true"><path d="M0 28H88" stroke="#dce2d3" stroke-dasharray="3 4"/></svg>';
-    const values = points.map(point => point.value), low = Math.min(...values), high = Math.max(...values);
-    const plot = points.map((point, i) => `${(i / Math.max(1, points.length - 1)) * 88},${32 - ((point.value - low) / (high - low || 1)) * 24}`).join(' ');
-    return `<svg class="sparkline" viewBox="0 0 88 40" aria-hidden="true"><polyline points="${plot}" stroke="#a3af8f"/></svg>`;
-  }
-  function renderCards() {
-    $('metric-cards').innerHTML = Object.entries(names).map(([lift, [name, english]]) => {
-      const records = state.records.filter(record => record.lift === lift && record.valid);
-      const best = max(records.filter(countsTowardBest), 'weight');
-      return `<article class="metric-card"><div class="metric-top"><span class="lift-symbol">${icon('bars')}</span><div class="metric-title">${name}<span>${english}</span></div><span class="metric-tag">TRAINING BEST</span></div><div class="metric-main"><div><strong>${number(best)}<small>kg</small></strong><div class="metric-caption">最高训练重量 · 不含半程和辅助动作</div></div>${sparkline(records)}</div><div class="metric-bottom"><span>累计训练量<strong>${records.length ? number(sum(records, 'volume') / 1000) : '—'} t</strong></span><span>工作组<strong>${records.length ? number(sum(records, 'sets'), 0) : '—'} 组</strong></span></div></article>`;
-    }).join('');
-  }
-  function renderChart() {
-    const records = state.records.filter(record => record.lift === state.lift && inRange(record));
-    const points = daily(records, state.metric);
-    const metric = state.metric;
-    const best = points.length ? Math.max(...points.map(point => point.value)) : null;
-    const unit = metric === 'volume' ? 'kg·次' : 'kg';
-    $('chart-value').innerHTML = `${number(best)}<small> ${unit}</small>`;
-    $('chart-value-label').textContent = { weight: '期间最高训练重量', e1rm: '期间最高估算 1RM', volume: '期间最高单日训练量' }[metric];
-    $('chart-subtitle').textContent = points.length ? `${points[0].date.replaceAll('-', '.')} — ${points.at(-1).date.replaceAll('-', '.')} · ${points.length} 个训练日` : '当前范围内暂无可绘制的记录';
-    $('chart-note').textContent = { weight: '每日取最高工作组重量；包含全程杠铃变式，不含 Pin Squat (high) 等半程动作和哑铃、自重等辅助动作，不代表比赛成绩。', e1rm: 'Epley 估算 = 重量 × (1 + 次数 ÷ 30)，单次取实际重量，每日取最高值。不含半程动作和辅助动作；仅供训练参考，非比赛成绩；未使用原表 Max 列。', volume: '每日训练量 = 当日有效行的「重量 × 次数 × 组数」之和；单位 kg·次，含变式动作。' }[metric];
-    const chart = $('chart');
-    const bounds = dateBounds();
-    if (bounds.start && bounds.end && bounds.start > bounds.end) { chart.innerHTML = `<div class="chart-empty">${icon('trend')}开始日期不能晚于结束日期<span>调整日期后即可查看趋势</span></div>`; return; }
-    if (!points.length) {
-      chart.innerHTML = `<div class="chart-empty">${icon('trend')}${state.loaded ? '这个范围内，还没有训练足迹' : '你的进步，值得被记录'}<span>${state.loaded ? '试试全部时间，或检查下方日期提示' : '选择 Excel 工作簿，点亮第一条力量曲线'}</span></div>`;
-      return;
-    }
-    const width = 640, height = 210, left = 43, right = 15, top = 19, bottom = 33;
-    const plotWidth = width - left - right, plotHeight = height - top - bottom;
-    const values = points.map(point => point.value);
-    let minimum = metric === 'volume' ? 0 : Math.floor((Math.min(...values) * .88) / 10) * 10;
-    let maximum = Math.ceil((Math.max(...values) * 1.08) / 10) * 10;
-    if (maximum <= minimum) maximum = minimum + 10;
-    const firstTime = Date.parse(points[0].date + 'T00:00:00Z'), lastTime = Date.parse(points.at(-1).date + 'T00:00:00Z');
-    const x = point => left + (firstTime === lastTime ? .5 : (Date.parse(point.date + 'T00:00:00Z') - firstTime) / (lastTime - firstTime)) * plotWidth;
-    const y = point => top + (maximum - point.value) / (maximum - minimum) * plotHeight;
-    const line = points.map((point, index) => `${index ? 'L' : 'M'}${x(point).toFixed(2)},${y(point).toFixed(2)}`).join(' ');
-    const area = `${line} L${x(points.at(-1)).toFixed(2)},${height - bottom} L${x(points[0]).toFixed(2)},${height - bottom} Z`;
-    let grid = '';
-    for (let tick = 0; tick <= 4; tick++) {
-      const position = top + tick / 4 * plotHeight;
-      const value = maximum - (maximum - minimum) * tick / 4;
-      grid += `<line class="gridline" x1="${left}" x2="${width - right}" y1="${position}" y2="${position}"/><text x="${left - 12}" y="${position + 4}" text-anchor="end">${number(value, 0)}</text>`;
-    }
-    const labels = [...new Set([0, Math.round((points.length - 1) / 3), Math.round((points.length - 1) * 2 / 3), points.length - 1])];
-    const dates = labels.map(index => `<text x="${x(points[index])}" y="${height - 8}" text-anchor="middle">${points[index].date.slice(5).replace('-', '.')}</text>`).join('');
-    const hits = points.map((point, index) => `<circle class="chart-hit" cx="${x(point)}" cy="${y(point)}" r="8" data-point="${index}"><title>${point.date} · ${number(point.value)} ${unit}</title></circle>`).join('');
-    chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${names[state.lift][0]}${$('chart-value-label').textContent}趋势，共 ${points.length} 个训练日，最高 ${number(best)} ${unit}"><defs><linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#edb08b" stop-opacity=".18"/><stop offset="100%" stop-color="#edb08b" stop-opacity=".01"/></linearGradient></defs>${grid}<path d="${area}" fill="url(#chart-fill)"/><path class="trendline" d="${line}"/><circle class="point" cx="${x(points.at(-1))}" cy="${y(points.at(-1))}" r="3.5"/>${dates}${hits}</svg><div class="chart-tooltip" hidden></div>`;
-    const tooltip = chart.querySelector('.chart-tooltip');
-    chart.querySelectorAll('[data-point]').forEach(hit => {
-      hit.addEventListener('pointerenter', () => {
-        const point = points[Number(hit.dataset.point)];
-        tooltip.innerHTML = `${point.date}<strong>${number(point.value)} ${unit}</strong>`;
-        tooltip.hidden = false;
-        const rect = chart.getBoundingClientRect(), dot = hit.getBoundingClientRect();
-        tooltip.style.left = Math.max(0, Math.min(rect.width - tooltip.offsetWidth, dot.left - rect.left - tooltip.offsetWidth / 2)) + 'px';
-        tooltip.style.top = Math.max(0, dot.top - rect.top - tooltip.offsetHeight - 8) + 'px';
-      });
-      hit.addEventListener('pointerleave', () => { tooltip.hidden = true; });
-    });
-  }
-  function renderRhythm() {
-    const records = state.records.filter(record => record.valid && inRange(record));
-    const dated = records.filter(record => record.date);
-    const days = new Set(dated.map(record => record.date));
-    $('session-count').textContent = state.loaded ? number(days.size, 0) : '—';
-    $('total-volume').innerHTML = `${state.loaded ? number(sum(records, 'volume') / 1000) : '—'}<small> t</small>`;
-    $('total-sets').innerHTML = `${state.loaded ? number(sum(records, 'sets'), 0) : '—'}<small> 组</small>`;
-    $('rhythm-period').textContent = `${state.range === 'all' ? '全部时间' : state.range === 'custom' ? '所选日期范围' : `最近 ${state.range} 天`} · 三项合计，记录你的坚持`;
-    const allDated = state.records.filter(record => record.valid && record.date);
-    const lastDate = allDated.map(record => record.date).sort().at(-1);
-    const anchor = lastDate ? new Date(lastDate + 'T00:00:00Z') : new Date(localDay(new Date()) + 'T00:00:00Z');
-    const countByDate = new Map();
-    for (const record of allDated) countByDate.set(record.date, (countByDate.get(record.date) || 0) + record.sets);
-    const cells = [];
-    for (let index = 83; index >= 0; index--) {
-      const date = new Date(anchor.getTime() - index * 86400000).toISOString().slice(0, 10);
-      const sets = countByDate.get(date) || 0;
-      const level = sets >= 12 ? 3 : sets >= 6 ? 2 : sets ? 1 : 0;
-      cells.push(`<span class="activity-cell level-${level}" title="${date}：${sets} 组" aria-label="${date}：${sets} 组"></span>`);
-    }
-    $('activity').innerHTML = cells.join('');
-  }
-  function renderRecords() {
-    const records = state.records.filter(record => (state.recordLift === 'all' || state.recordLift === record.lift) && inRange(record)).sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.row - a.row || a.sheet.localeCompare(b.sheet));
-    $('record-count').textContent = `${number(records.length, 0)} 条记录`;
-    const shown = records.slice(0, state.limit);
-    $('records').innerHTML = shown.length ? shown.map(record => {
-      const date = record.date ? record.date.replaceAll('-', '.') : escape(record.dateOriginal || record.dateRaw || '未填写日期');
-      const detail = !record.date ? '<small>日期待确认</small>' : record.dateInferred ? `<small title="${escape(`${record.dateOriginal} → ${record.date}；${record.dateInference}`)}">已按顺序校正</small>` : '';
-      const quantity = value => value == null || value === '' ? '—' : escape(value);
-      const issues = record.issues.length ? `<span class="data-issue">${escape(record.issues.join('；'))}</span>` : '';
-      return `<tr><td class="date-cell">${date}${detail}</td><td><span class="lift-chip ${record.lift}">${names[record.lift][0]}</span>${escape(record.exercise)}</td><td class="weight-cell">${quantity(record.weightRaw)}<small>kg</small></td><td>${quantity(record.repsRaw)} <span aria-label="乘">×</span> ${quantity(record.setsRaw)}</td><td>${record.rpeRaw ? `<span class="rpe-badge ${rpeBand(record.rpe)}" title="RPE ${escape(record.rpeRaw)}${rpeBand(record.rpe) ? ` · ${rpeLabels[rpeBand(record.rpe)]}` : ''}">${escape(record.rpeRaw)}</span>` : '—'}</td><td>${record.valid ? `${number(record.volume)} <small>kg·次</small>` : '—'}</td><td class="note-cell">${escape(record.note || '—')}${record.manualMax ? `<span class="data-issue">原表 Max：${escape(record.manualMax)}</span>` : ''}${record.partialRange ? '<span class="data-issue">半程动作，不计入最高重量和 1RM</span>' : record.accessory ? '<span class="data-issue">辅助动作，不计入最高重量和 1RM</span>' : ''}${issues}</td></tr>`;
-    }).join('') : `<tr><td colspan="7" class="empty-table"><strong>${state.loaded ? '当前筛选没有训练记录' : '你的下一次进步，从这里开始'}</strong>${state.loaded ? '切换项目或日期范围，看看其他训练。' : '选择 HylPowerliftingTraining.xlsx，读取你的真实训练数据。'}</td></tr>`;
-    $('show-more').hidden = records.length <= state.limit;
-    $('table-description').textContent = records.length ? `已显示 ${shown.length} / ${records.length} 条 · 日期明确的记录优先，按日期倒序` : '原始记录来自你的 Excel 工作簿';
-  }
+  const rpeBand = rpe => rpe == null || !Number.isFinite(rpe) ? '' : rpe >= 10 ? 'max' : rpe >= 9 ? 'very-hard' : rpe >= 8 ? 'hard' : rpe >= 7 ? 'moderate' : 'easy';
   const clock = seconds => {
     if (seconds == null) return '—';
     const hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60), rest = String(Math.round(seconds % 60)).padStart(2, '0');
     return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
   };
-  const pace = seconds => { const total = Math.round(seconds); return `${Math.floor(total / 60)}'${String(total % 60).padStart(2, '0')}"`; };
-  const weekStart = date => { const day = new Date(date + 'T00:00:00Z'); return new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * 86400000).toISOString().slice(0, 10); };
-  function renderRunChart(runs) {
-    const chart = $('run-chart');
-    if (!runs.length) { chart.innerHTML = `<div class="chart-empty">${icon('run')}${state.loaded ? '还没有跑步记录' : '载入记录后显示每周里程'}<span>记录第一次跑步后，这里显示每周里程</span></div>`; return; }
-    const today = localDay(new Date()), latest = runs.map(run => run.date).sort().at(-1);
-    const end = Date.parse(weekStart(latest > today ? latest : today) + 'T00:00:00Z');
-    const weeks = Array.from({ length: 12 }, (_, index) => new Date(end - (11 - index) * 7 * 86400000).toISOString().slice(0, 10));
-    const totals = new Map(weeks.map(week => [week, 0]));
-    for (const run of runs) { const week = weekStart(run.date); if (totals.has(week)) totals.set(week, totals.get(week) + run.distance); }
-    const values = weeks.map(week => totals.get(week));
-    const width = 640, height = 160, side = 6, top = 24, bottom = 24, plotHeight = height - top - bottom;
-    const slot = (width - side * 2) / weeks.length, barWidth = Math.min(30, slot * .58), maximum = Math.max(...values, 1);
-    const bars = weeks.map((week, index) => {
-      const value = values[index], barHeight = value / maximum * plotHeight, x = side + slot * index + (slot - barWidth) / 2, y = top + plotHeight - barHeight, center = (x + barWidth / 2).toFixed(1);
-      const label = (weeks.length - 1 - index) % 2 === 0 ? `<text x="${center}" y="${height - 6}" text-anchor="middle">${week.slice(5).replace('-', '.')}</text>` : '';
-      return `<rect class="bar${index === weeks.length - 1 ? ' current' : ''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(1)}" rx="3"><title>${week} 起这一周：${number(value)} km</title></rect>${value ? `<text class="bar-value" x="${center}" y="${(y - 6).toFixed(1)}" text-anchor="middle">${number(value)}</text>` : ''}${label}`;
+  const pace = secondsPerKm => { const total = Math.round(secondsPerKm); return `${Math.floor(total / 60)}'${String(total % 60).padStart(2, '0')}"`; };
+  const rangeStart = () => state.range === 'all' ? null : isoDate(time(localToday()) - (Number(state.range) - 1) * DAY);
+  const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const measure = document.createElement('canvas').getContext('2d');
+  const textWidth = text => { measure.font = `12px ${getComputedStyle(document.body).fontFamily}`; return measure.measureText(text).width; };
+  const stat = (label, value, unit = '', note = '') => `<div class="stat"><span>${label}</span><strong>${value}${unit && value !== '—' ? `<small>${unit}</small>` : ''}</strong>${note ? `<em>${note}</em>` : ''}</div>`;
+
+  // Rounded axis values that cover [low, high].
+  function niceTicks(low, high, count, padded) {
+    if (padded) { const margin = (high - low) * 0.1 || Math.max(high * 0.05, 5); low -= margin; high += margin; }
+    low = Math.max(0, low);
+    if (high <= low) high = low + 1;
+    const raw = (high - low) / count, magnitude = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map(factor => factor * magnitude).find(candidate => candidate >= raw);
+    const ticks = [];
+    for (let value = Math.floor(low / step) * step; value < high + step - 1e-9; value += step) ticks.push(Number(value.toFixed(6)));
+    return ticks;
+  }
+  function dateTicks(first, last, count) {
+    if (last <= first) return [first];
+    return Array.from({ length: count }, (_, index) => first + (last - first) * index / (count - 1));
+  }
+  const tickDate = (ms, long) => { const date = isoDate(ms); return long ? `${date.slice(0, 4)}.${Number(date.slice(5, 7))}` : `${Number(date.slice(5, 7))}.${Number(date.slice(8, 10))}`; };
+  // A column that grows from the baseline with a 4px rounded data end.
+  function column(x, y, width, base) {
+    const height = base - y, radius = Math.min(4, width / 2, height);
+    if (height <= 0) return '';
+    return `M${x.toFixed(1)},${base.toFixed(1)}V${(y + radius).toFixed(1)}Q${x.toFixed(1)},${y.toFixed(1)} ${(x + radius).toFixed(1)},${y.toFixed(1)}H${(x + width - radius).toFixed(1)}Q${(x + width).toFixed(1)},${y.toFixed(1)} ${(x + width).toFixed(1)},${(y + radius).toFixed(1)}V${base.toFixed(1)}Z`;
+  }
+
+  // One entry per training day of a lift: best set by weight and by e1RM, plus totals.
+  function trainingDays(lift, start) {
+    const days = new Map();
+    for (const record of state.records) {
+      if (record.lift !== lift || !record.valid || !record.date || (start && record.date < start)) continue;
+      const day = days.get(record.date) || { date: record.date, volume: 0, sets: 0, records: [], top: null, topE1rm: null };
+      day.volume += record.volume;
+      day.sets += record.sets;
+      day.records.push(record);
+      if (countsTowardBest(record)) {
+        if (!day.top || record.weight > day.top.weight || (record.weight === day.top.weight && record.reps > day.top.reps)) day.top = record;
+        if (!day.topE1rm || record.e1rm > day.topE1rm.e1rm) day.topE1rm = record;
+      }
+      days.set(record.date, day);
+    }
+    return [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
+  }
+  const metricValue = (day, metric) => metric === 'volume' ? day.volume : metric === 'e1rm' ? day.topE1rm?.e1rm ?? null : day.top?.weight ?? null;
+  const valueHtml = value => state.metric === 'volume' ? `${fmt(value, 0)}<small>kg</small>` : `${fmt(value)}<small>kg</small>`;
+  const valueText = value => state.metric === 'volume' ? `${fmt(value, 0)} kg` : `${fmt(value)} kg`;
+  const setText = record => `${escape(record.exercise)} ${fmt(record.weight)}kg × ${record.reps}${record.sets > 1 ? ` × ${record.sets} 组` : ''}${record.rpe != null ? ` · RPE ${fmt(record.rpe)}` : ''}`;
+  function exerciseSummary(records) {
+    const sets = new Map();
+    for (const record of records) sets.set(record.exercise, (sets.get(record.exercise) || 0) + record.sets);
+    return [...sets].map(([name, count]) => `${escape(name)} ${count} 组`).join('、');
+  }
+
+  // The top bar keeps only the freshness of the data; counts and provenance live in the footer.
+  function renderHeader() {
+    if (!state.loaded) return;
+    const snapshot = state.source === 'snapshot' && state.generatedAt;
+    $('source-detail').textContent = snapshot ? `数据更新于 ${stamp(new Date(state.generatedAt))}` : `读取于 ${stamp(state.readAt)}`;
+    const counts = `共 ${fmt(state.records.length, 0)} 条力量记录${state.runs.length ? `、${fmt(state.runs.length, 0)} 次跑步` : ''}`;
+    $('footer-text').textContent = snapshot ? `${counts} · 私人只读页面，数据以最近一次发布为准` : `${counts} · 数据只在这台电脑的浏览器里读取，不上传`;
+  }
+
+  function liftSummary(key) {
+    const days = trainingDays(key, null);
+    let best = null, bestE1rm = null;
+    for (const day of days) {
+      if (day.top && (!best || day.top.weight > best.weight)) best = day.top;
+      if (day.topE1rm && (!bestE1rm || day.topE1rm.e1rm > bestE1rm.e1rm)) bestE1rm = day.topE1rm;
+    }
+    // Weekly best e1RM over the last 12 weeks, for the sparkline.
+    const end = time(weekStart(localToday()));
+    const weekly = Array.from({ length: 12 }, (_, index) => ({ week: isoDate(end - (11 - index) * 7 * DAY), value: null }));
+    const byWeek = new Map(weekly.map(item => [item.week, item]));
+    for (const day of days) {
+      const item = byWeek.get(weekStart(day.date));
+      if (item && day.topE1rm) item.value = Math.max(item.value ?? 0, day.topE1rm.e1rm);
+    }
+    return { best, bestE1rm, spark: weekly.map(item => item.value) };
+  }
+  function sparkline(values) {
+    const known = values.map((value, index) => ({ value, index })).filter(item => item.value != null);
+    if (known.length < 2) return '<svg class="spark" aria-hidden="true"></svg>';
+    const low = Math.min(...known.map(item => item.value)), high = Math.max(...known.map(item => item.value));
+    const x = index => index / (values.length - 1) * 100, y = value => 26 - (value - low) / (high - low || 1) * 22;
+    const path = known.map((item, index) => `${index ? 'L' : 'M'}${x(item.index).toFixed(2)},${y(item.value).toFixed(2)}`).join('');
+    const last = known.at(-1);
+    return `<svg class="spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><path class="spark-line" d="${path}"/><path class="spark-end" d="M${x(last.index).toFixed(2)},${y(last.value).toFixed(2)}h0"/></svg>`;
+  }
+  function renderHero() {
+    const summaries = LIFTS.map(lift => ({ lift, ...liftSummary(lift.key) }));
+    const total = summaries.every(item => item.best) ? summaries.reduce((sum, item) => sum + item.best.weight, 0) : null;
+    $('total-value').innerHTML = total == null ? '—' : `${fmt(total)}<small>kg</small>`;
+    $('total-split').innerHTML = summaries.map(({ lift, best }) => `<span>${plate(lift.color)}${lift.name} ${best ? fmt(best.weight) : '—'}</span>`).join('<span class="plus" aria-hidden="true">+</span>');
+    $('lift-tiles').innerHTML = summaries.map(({ lift, best, bestE1rm, spark }) => {
+      const detail = best ? `${best.exercise} ${fmt(best.weight)}kg × ${best.reps} · ${best.date}` : '暂无记录';
+      return `<button type="button" class="lift-tile" data-lift="${lift.key}" aria-pressed="${state.lift === lift.key}" style="--lift:${lift.color}" title="${escape(detail)}" aria-label="${lift.name}最高训练重量 ${best ? fmt(best.weight) + ' 公斤' : '暂无'}，查看趋势"><span class="tile-name">${plate(lift.color)}${lift.name}</span><span class="tile-value">${best ? fmt(best.weight) : '—'}<small>kg</small></span><span class="tile-meta">${bestE1rm ? `估算 1RM ${fmt(bestE1rm.e1rm)}` : '暂无记录'}</span>${sparkline(spark)}</button>`;
     }).join('');
-    chart.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="最近 12 周每周跑步里程，最高一周 ${number(Math.max(...values))} km"><line class="baseline" x1="${side}" x2="${width - side}" y1="${top + plotHeight}" y2="${top + plotHeight}"/>${bars}</svg>`;
   }
-  function renderRuns() {
-    const runs = state.runs.filter(run => run.valid && run.date);
-    const distance = list => list.reduce((total, run) => total + run.distance, 0);
-    const today = localDay(new Date()), recentStart = new Date(Date.parse(today + 'T00:00:00Z') - 27 * 86400000).toISOString().slice(0, 10);
-    const stat = (id, value, unit) => { $(id).innerHTML = `${runs.length ? value : '—'}<small> ${unit}</small>`; };
-    stat('run-total', number(distance(runs)), 'km');
-    stat('run-recent', number(distance(runs.filter(run => run.date >= recentStart && run.date <= today))), 'km');
-    stat('run-count', number(runs.length, 0), '次');
-    stat('run-longest', number(Math.max(0, ...runs.map(run => run.distance))), 'km');
-    renderRunChart(runs);
-    const sorted = state.runs.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.row - a.row);
-    const shown = sorted.slice(0, state.runLimit);
-    $('runs').innerHTML = shown.length ? shown.map(run => {
-      const date = run.date ? run.date.replaceAll('-', '.') : escape(run.dateRaw || '未填写日期');
-      const issues = run.issues.length ? `<span class="data-issue">${escape(run.issues.join('；'))}</span>` : '';
-      return `<tr><td class="date-cell">${date}</td><td class="weight-cell">${run.distance == null ? '—' : number(run.distance, 2)}<small>km</small></td><td>${clock(run.seconds)}</td><td>${run.pace ? `${pace(run.pace)}<small> /km</small>` : '—'}</td><td class="note-cell">${escape(run.note || '—')}${issues}</td></tr>`;
-    }).join('') : `<tr><td colspan="5" class="empty-table"><strong>${state.loaded ? '还没有跑步记录' : '跑步记录会显示在这里'}</strong>在聊天里发“10.11 跑步 12km”，就会记到 Excel 的 Running 表。</td></tr>`;
-    $('show-more-runs').hidden = sorted.length <= state.runLimit;
-    $('run-table-description').textContent = sorted.length ? `已显示 ${shown.length} / ${sorted.length} 次 · 按日期倒序` : '跑步记录来自 Excel 的 Running 表';
+  function renderLiftSwitch() {
+    $('lift-switch').innerHTML = LIFTS.map(lift => `<button class="chip" type="button" data-lift="${lift.key}" aria-pressed="${state.lift === lift.key}">${plate(lift.color)}${lift.name}</button>`).join('');
   }
+
+  function renderTrend() {
+    const start = rangeStart();
+    const days = trainingDays(state.lift, start);
+    view.trend = days.map(day => ({ day, value: metricValue(day, state.metric) })).filter(point => point.value != null && point.value > 0);
+    if (state.trendIndex == null || state.trendIndex >= view.trend.length) state.trendIndex = view.trend.length ? view.trend.length - 1 : null;
+    const lift = LIFT[state.lift], metric = METRICS[state.metric], points = view.trend;
+    $('trend-caption').textContent = `${lift.name} · ${metric.label} · ${RANGE_LABEL[state.range]}`;
+    $('trend-note').textContent = metric.note;
+    const peak = points.reduce((best, point) => !best || point.value > best.value ? point : best, null);
+    const latest = points.at(-1);
+    const stats = state.metric === 'volume'
+      ? [stat('期间总量', points.length ? tons(points.reduce((sum, point) => sum + point.value, 0)) : '—', 't'), stat('单日最高', peak ? tons(peak.value) : '—', 't', peak ? monthDay(peak.day.date) : ''), stat('训练日', fmt(days.length, 0), '天')]
+      : [stat('期间最高', peak ? fmt(peak.value) : '—', 'kg', peak ? monthDay(peak.day.date) : ''), stat('最近一次', latest ? fmt(latest.value) : '—', 'kg', latest ? monthDay(latest.day.date) : ''), stat('训练日', fmt(days.length, 0), '天')];
+    $('trend-stats').innerHTML = stats.join('');
+    drawTrend();
+    renderTrendTable();
+  }
+  function drawTrend() {
+    const box = $('trend-chart'), points = view.trend, lift = LIFT[state.lift];
+    box.style.setProperty('--series', lift.color);
+    view.trendGeometry = null;
+    if (!points.length) {
+      box.innerHTML = `<div class="chart-empty">${icon('trend')}${state.loaded ? `${RANGE_LABEL[state.range]}没有${lift.name}记录` : '载入记录后显示趋势'}<span>${state.loaded ? '换个时间范围看看' : ''}</span></div>`;
+      $('trend-readout').hidden = true;
+      return;
+    }
+    const isVolume = state.metric === 'volume';
+    const width = Math.max(280, Math.round(box.clientWidth || 640)), height = width < 560 ? 230 : 280;
+    const values = points.map(point => point.value);
+    const ticks = niceTicks(isVolume ? 0 : Math.min(...values), Math.max(...values), 4, !isVolume);
+    const tickLabel = value => isVolume ? `${fmt(value / 1000)}t` : fmt(value);
+    const pad = { top: 26, right: 16, bottom: 30, left: Math.ceil(Math.max(...ticks.map(tick => textWidth(tickLabel(tick))))) + 10 };
+    const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
+    const start = rangeStart();
+    const first = time(start ?? points[0].day.date), last = Math.max(time(localToday()), time(points.at(-1).day.date));
+    const span = Math.max(last - first, DAY);
+    const xOf = date => pad.left + (time(date) - first) / span * plotWidth;
+    const yOf = value => pad.top + (ticks.at(-1) - value) / (ticks.at(-1) - ticks[0]) * plotHeight;
+    const base = yOf(ticks[0]);
+    let svg = '';
+    for (const tick of ticks) {
+      const y = yOf(tick);
+      svg += `<line class="${tick === ticks[0] ? 'axis' : 'grid'}" x1="${pad.left}" x2="${width - pad.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text x="${pad.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${tickLabel(tick)}</text>`;
+    }
+    const xTicks = dateTicks(first, last, width < 420 ? 3 : 5);
+    xTicks.forEach((tick, index) => {
+      const anchor = xTicks.length === 1 ? 'middle' : index === 0 ? 'start' : index === xTicks.length - 1 ? 'end' : 'middle';
+      svg += `<text x="${(pad.left + (tick - first) / span * plotWidth).toFixed(1)}" y="${height - 8}" text-anchor="${anchor}">${tickDate(tick, span > 330 * DAY)}</text>`;
+    });
+    const xs = points.map(point => xOf(point.day.date)), ys = values.map(yOf);
+    const peakIndex = values.indexOf(Math.max(...values));
+    if (isVolume) {
+      const barWidth = Math.max(2, Math.min(24, plotWidth / (span / DAY + 1) * 0.7));
+      svg += points.map((point, index) => `<path class="bar" d="${column(xs[index] - barWidth / 2, ys[index], barWidth, base)}"/>`).join('');
+    } else {
+      const line = xs.map((x, index) => `${index ? 'L' : 'M'}${x.toFixed(1)},${ys[index].toFixed(1)}`).join('');
+      svg += `<path class="area" d="${line}L${xs.at(-1).toFixed(1)},${base.toFixed(1)}L${xs[0].toFixed(1)},${base.toFixed(1)}Z"/><path class="line" d="${line}"/>`;
+      if (plotWidth / Math.max(points.length - 1, 1) >= 7) svg += xs.map((x, index) => `<circle class="point" cx="${x.toFixed(1)}" cy="${ys[index].toFixed(1)}" r="2.5"/>`).join('');
+      svg += `<circle class="best" cx="${xs[peakIndex].toFixed(1)}" cy="${ys[peakIndex].toFixed(1)}" r="5.5"/><circle class="end" cx="${xs.at(-1).toFixed(1)}" cy="${ys.at(-1).toFixed(1)}" r="4.5"/>`;
+    }
+    // Label only the extreme; the axis, readout and table carry every other value.
+    const peakLabel = `${isVolume ? '单日最高' : '最佳'} ${isVolume ? `${fmt(values[peakIndex] / 1000)}t` : fmt(values[peakIndex])}`;
+    const labelWidth = textWidth(peakLabel);
+    const labelX = Math.min(Math.max(xs[peakIndex], pad.left + labelWidth / 2), width - pad.right - labelWidth / 2);
+    svg += `<text class="best-label" x="${labelX.toFixed(1)}" y="${(ys[peakIndex] - 11).toFixed(1)}" text-anchor="middle">${peakLabel}</text>`;
+    const aria = `${lift.name}${METRICS[state.metric].label}，${RANGE_LABEL[state.range]}，${points.length} 个训练日，最高 ${valueText(values[peakIndex])}`;
+    box.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(aria)}">${svg}<line class="crosshair" x1="0" x2="0" y1="${pad.top - 6}" y2="${base.toFixed(1)}" visibility="hidden"/><circle class="focus" r="5" visibility="hidden"/></svg><div class="tooltip" hidden></div>`;
+    view.trendGeometry = { xs, ys };
+    showTrendSelection(false);
+  }
+  function showTrendSelection(withTooltip) {
+    const box = $('trend-chart'), geometry = view.trendGeometry, index = state.trendIndex;
+    if (!geometry || index == null) return;
+    const svg = box.querySelector('svg'), cross = svg.querySelector('.crosshair'), focus = svg.querySelector('.focus'), tip = box.querySelector('.tooltip');
+    const x = geometry.xs[index], y = geometry.ys[index];
+    cross.setAttribute('x1', x.toFixed(1));
+    cross.setAttribute('x2', x.toFixed(1));
+    // The crosshair appears while the reader is scrubbing; at rest the focus dot marks the day.
+    cross.setAttribute('visibility', withTooltip ? 'visible' : 'hidden');
+    focus.setAttribute('cx', x.toFixed(1));
+    focus.setAttribute('cy', y.toFixed(1));
+    focus.setAttribute('visibility', 'visible');
+    if (withTooltip) {
+      const point = view.trend[index];
+      tip.innerHTML = `<strong>${valueText(point.value)}</strong>${monthDay(point.day.date)} ${weekday(point.day.date)}`;
+      tip.hidden = false;
+      const left = Math.min(Math.max(x - tip.offsetWidth / 2, 0), box.clientWidth - tip.offsetWidth);
+      const top = y - tip.offsetHeight - 14 < 0 ? y + 14 : y - tip.offsetHeight - 14;
+      tip.style.transform = `translate(${left.toFixed(0)}px, ${top.toFixed(0)}px)`;
+    } else tip.hidden = true;
+    renderTrendReadout();
+  }
+  function renderTrendReadout() {
+    const box = $('trend-readout'), point = view.trend[state.trendIndex];
+    if (!point) { box.hidden = true; return; }
+    const day = point.day;
+    let detail;
+    if (state.metric === 'volume') detail = `<p>${fmt(day.sets, 0)} 组：${exerciseSummary(day.records)}</p>`;
+    else {
+      const top = state.metric === 'e1rm' ? day.topE1rm : day.top;
+      const other = state.metric === 'weight' ? `估算 1RM ${fmt(top.e1rm)}kg` : `当天最高重量 ${fmt(day.top.weight)}kg`;
+      detail = `<p>最好的一组：${setText(top)}</p><p>${other} · 当天 ${fmt(day.sets, 0)} 组 · 训练量 ${fmt(day.volume, 0)}kg</p>`;
+    }
+    box.innerHTML = `<div class="readout-head"><span>${fullDate(day.date)} ${weekday(day.date)}</span><span>第 ${state.trendIndex + 1} / ${view.trend.length} 个训练日</span></div><span class="readout-value">${valueHtml(point.value)}</span>${detail}<button type="button" class="link-button" data-goto="${day.date}">查看这天的训练${icon('arrow')}</button>`;
+    box.hidden = false;
+  }
+  function renderTrendTable() {
+    const volume = state.metric === 'volume';
+    const rows = [...view.trend].reverse().map(point => {
+      const top = state.metric === 'e1rm' ? point.day.topE1rm : point.day.top;
+      return `<tr><td>${point.day.date}</td><td>${valueText(point.value)}</td><td>${volume || !top ? `${fmt(point.day.sets, 0)} 组` : `${escape(top.exercise)} ${fmt(top.weight)} × ${top.reps}`}</td></tr>`;
+    }).join('');
+    $('trend-table').innerHTML = `<thead><tr><th>日期</th><th>${METRICS[state.metric].label}</th><th>${volume ? '组数' : '最好的一组'}</th></tr></thead><tbody>${rows || '<tr><td colspan="3">没有数据</td></tr>'}</tbody>`;
+  }
+
+  function calendarDays(start) {
+    const days = new Map();
+    const entry = date => {
+      if (!days.has(date)) days.set(date, { date, sets: { squat: 0, bench: 0, deadlift: 0 }, total: 0, volume: 0, km: 0, runs: 0 });
+      return days.get(date);
+    };
+    for (const record of state.records) {
+      if (!record.valid || !record.date || (start && record.date < start)) continue;
+      const day = entry(record.date);
+      day.sets[record.lift] += record.sets;
+      day.total += record.sets;
+      day.volume += record.volume;
+    }
+    for (const run of state.runs) {
+      if (!run.valid || !run.date || (start && run.date < start)) continue;
+      const day = entry(run.date);
+      day.km += run.distance;
+      day.runs += 1;
+    }
+    return days;
+  }
+  function renderCalendar() {
+    const start = rangeStart(), today = localToday();
+    const days = calendarDays(start);
+    view.calendar = days;
+    const lifting = [...days.values()].filter(day => day.total > 0);
+    $('calendar-stats').innerHTML = [
+      stat('力量训练日', fmt(lifting.length, 0), '天'),
+      stat('工作组', fmt(lifting.reduce((sum, day) => sum + day.total, 0), 0), '组'),
+      stat('训练量', lifting.length ? tons(lifting.reduce((sum, day) => sum + day.volume, 0)) : '—', 't')
+    ].join('');
+    $('calendar-caption').textContent = `${RANGE_LABEL[state.range]} · 点一下格子，查看那天练了什么`;
+    const dates = [...days.keys()].sort();
+    const first = start ?? dates[0] ?? today;
+    view.calendarFirst = first;
+    const firstWeek = time(weekStart(first)), lastWeek = time(weekStart(today));
+    const weeks = Math.max(1, Math.round((lastWeek - firstWeek) / (7 * DAY)) + 1);
+    const cell = 14, step = 17, left = 22, top = 18;
+    const width = left + weeks * step, height = top + 7 * step;
+    let svg = [['一', 0], ['三', 2], ['五', 4]].map(([label, row]) => `<text x="0" y="${top + row * step + 11}">${label}</text>`).join('');
+    let labelledColumn = -3, labelledMonth = '';
+    for (let week = 0; week < weeks; week++) {
+      const weekTime = firstWeek + week * 7 * DAY;
+      const month = isoDate(weekTime + 6 * DAY).slice(0, 7);
+      if (month !== labelledMonth && week - labelledColumn >= 3) {
+        svg += `<text x="${left + week * step}" y="11">${Number(month.slice(5))}月</text>`;
+        labelledColumn = week;
+        labelledMonth = month;
+      }
+      for (let weekdayIndex = 0; weekdayIndex < 7; weekdayIndex++) {
+        const date = isoDate(weekTime + weekdayIndex * DAY);
+        if (date > today || date < first) continue;
+        const day = days.get(date);
+        const level = !day || !day.total ? 0 : day.total >= 18 ? 4 : day.total >= 12 ? 3 : day.total >= 6 ? 2 : 1;
+        const x = left + week * step, y = top + weekdayIndex * step;
+        const summary = day ? [day.total ? `${day.total} 组` : '', day.runs ? `跑步 ${fmt(day.km)} km` : ''].filter(Boolean).join('，') : '休息';
+        svg += `<rect class="cell h${level}${date === today ? ' today' : ''}" data-date="${date}" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3"><title>${monthDay(date)} ${weekday(date)}：${summary}</title></rect>`;
+        if (day?.runs) svg += `<circle class="run-dot" cx="${x + cell - 3}" cy="${y + cell - 3}" r="3"/>`;
+      }
+    }
+    $('calendar').innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(`${RANGE_LABEL[state.range]}训练日历，${lifting.length} 个力量训练日`)}">${svg}</svg>`;
+    if (!state.calendarDate || state.calendarDate < first || state.calendarDate > today) state.calendarDate = dates.at(-1) ?? today;
+    selectCalendarDate(state.calendarDate, false);
+    const scroller = $('calendar-scroll');
+    scroller.scrollLeft = scroller.scrollWidth;
+  }
+  function selectCalendarDate(date, reveal) {
+    state.calendarDate = date;
+    const svg = $('calendar').querySelector('svg');
+    svg?.querySelectorAll('.selected').forEach(cell => cell.classList.remove('selected'));
+    const cell = svg?.querySelector(`[data-date="${date}"]`);
+    cell?.classList.add('selected');
+    if (reveal && cell) cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const box = $('day-readout'), day = view.calendar.get(date);
+    if (!state.loaded) { box.hidden = true; return; }
+    const items = day ? [
+      ...LIFTS.filter(lift => day.sets[lift.key]).map(lift => `<li>${plate(lift.color)}${lift.name} ${day.sets[lift.key]} 组</li>`),
+      day.runs ? `<li>${plate(RUN_COLOR)}跑步 ${fmt(day.km, 2)} km</li>` : ''
+    ].join('') : '';
+    box.innerHTML = `<div class="readout-head"><span>${fullDate(date)} ${weekday(date)}</span><span>${date === localToday() ? '今天' : ''}</span></div>${day ? `<ul class="readout-items">${items}</ul>${day.total ? `<p>训练量 ${fmt(day.volume, 0)}kg</p>` : ''}<button type="button" class="link-button" data-goto="${date}">查看这天的训练${icon('arrow')}</button>` : '<p>这天没有训练记录。</p>'}`;
+    box.hidden = false;
+  }
+
+  function renderRunning() {
+    const start = rangeStart(), today = localToday();
+    const runs = state.runs.filter(run => run.valid && run.date && (!start || run.date >= start)).sort((a, b) => a.date.localeCompare(b.date));
+    const total = runs.reduce((sum, run) => sum + run.distance, 0);
+    const timed = runs.filter(run => run.seconds);
+    const average = timed.length ? timed.reduce((sum, run) => sum + run.seconds, 0) / timed.reduce((sum, run) => sum + run.distance, 0) : null;
+    $('running-stats').innerHTML = [
+      stat('里程', runs.length ? fmt(total) : '—', 'km'),
+      stat('次数', runs.length ? fmt(runs.length, 0) : '—', '次'),
+      stat('最长', runs.length ? fmt(Math.max(...runs.map(run => run.distance))) : '—', 'km'),
+      stat('平均配速', average ? pace(average) : '—', average ? '/km' : '')
+    ].join('');
+    $('running-caption').textContent = `${RANGE_LABEL[state.range]} · 每周里程，周一为一周开始`;
+    view.weeks = [];
+    if (runs.length) {
+      const firstWeek = time(weekStart(start ?? runs[0].date)), lastWeek = time(weekStart(today));
+      const count = Math.max(1, Math.round((lastWeek - firstWeek) / (7 * DAY)) + 1);
+      view.weeks = Array.from({ length: count }, (_, index) => ({ week: isoDate(firstWeek + index * 7 * DAY), runs: [], km: 0 }));
+      const byWeek = new Map(view.weeks.map(item => [item.week, item]));
+      for (const run of runs) {
+        const item = byWeek.get(weekStart(run.date));
+        if (item) { item.runs.push(run); item.km += run.distance; }
+      }
+      if (!byWeek.has(state.runWeek)) state.runWeek = [...view.weeks].reverse().find(item => item.km > 0)?.week ?? view.weeks.at(-1).week;
+    }
+    drawRunChart();
+    renderRunReadout();
+  }
+  function drawRunChart() {
+    const box = $('run-chart'), weeks = view.weeks;
+    box.style.setProperty('--series', RUN_COLOR);
+    view.runXs = [];
+    if (!weeks.length) {
+      box.innerHTML = `<div class="chart-empty">${icon('run')}${state.loaded ? `${RANGE_LABEL[state.range]}没有跑步记录` : '载入记录后显示每周里程'}<span>在聊天里发“10.12 跑步 10km”就能记录</span></div>`;
+      return;
+    }
+    const width = Math.max(260, Math.round(box.clientWidth || 480)), height = 200;
+    const ticks = niceTicks(0, Math.max(...weeks.map(item => item.km), 1), 3, false);
+    const pad = { top: 24, right: 8, bottom: 30, left: Math.ceil(Math.max(...ticks.map(tick => textWidth(fmt(tick))))) + 10 };
+    const plotWidth = width - pad.left - pad.right, plotHeight = height - pad.top - pad.bottom;
+    const slot = plotWidth / weeks.length, barWidth = Math.max(3, Math.min(24, slot * 0.6));
+    const yOf = value => pad.top + (ticks.at(-1) - value) / ticks.at(-1) * plotHeight, base = yOf(0);
+    let svg = '';
+    for (const tick of ticks) {
+      const y = yOf(tick);
+      svg += `<line class="${tick === 0 ? 'axis' : 'grid'}" x1="${pad.left}" x2="${width - pad.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><text x="${pad.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${fmt(tick)}</text>`;
+    }
+    const labelEvery = Math.max(1, Math.ceil(weeks.length / (width < 420 ? 4 : 6)));
+    weeks.forEach((item, index) => {
+      const center = pad.left + slot * index + slot / 2;
+      view.runXs.push(center);
+      if (item.week === state.runWeek) svg += `<rect class="week-highlight" x="${(center - slot / 2).toFixed(1)}" y="${pad.top - 8}" width="${slot.toFixed(1)}" height="${(base - pad.top + 8).toFixed(1)}" rx="6"/>`;
+      if (item.km > 0) {
+        svg += `<path class="bar" d="${column(center - barWidth / 2, yOf(item.km), barWidth, base)}"/>`;
+        if (barWidth >= 14) svg += `<text class="bar-value" x="${center.toFixed(1)}" y="${(yOf(item.km) - 6).toFixed(1)}" text-anchor="middle">${fmt(item.km)}</text>`;
+      }
+      if ((weeks.length - 1 - index) % labelEvery === 0) svg += `<text x="${center.toFixed(1)}" y="${height - 8}" text-anchor="middle">${Number(item.week.slice(5, 7))}.${Number(item.week.slice(8, 10))}</text>`;
+      svg += `<rect class="hit" x="${(center - slot / 2).toFixed(1)}" y="${pad.top - 8}" width="${slot.toFixed(1)}" height="${(base - pad.top + 8).toFixed(1)}"><title>${monthDay(item.week)} 起这一周：${fmt(item.km)} km</title></rect>`;
+    });
+    box.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(`每周跑步里程，共 ${weeks.length} 周，最多一周 ${fmt(Math.max(...weeks.map(item => item.km)))} 公里`)}">${svg}</svg>`;
+  }
+  function renderRunReadout() {
+    const box = $('run-readout'), item = view.weeks.find(week => week.week === state.runWeek);
+    if (!item) { box.hidden = true; return; }
+    const end = isoDate(time(item.week) + 6 * DAY);
+    const list = item.runs.map(run => `<li>${plate(RUN_COLOR)}${monthDay(run.date)} ${fmt(run.distance, 2)} km${run.seconds ? ` · ${clock(run.seconds)} · ${pace(run.pace)}/km` : ''}</li>`).join('');
+    box.innerHTML = `<div class="readout-head"><span>${monthDay(item.week)} – ${monthDay(end)}</span><span>${item.runs.length} 次</span></div><span class="readout-value">${fmt(item.km)}<small>km</small></span>${list ? `<ul class="readout-items">${list}</ul>` : '<p>这一周没有跑步。</p>'}`;
+    box.hidden = false;
+  }
+
+  function renderLogFilter() {
+    const options = [['all', '全部', null], ...LIFTS.map(lift => [lift.key, lift.name, lift.color]), ['run', '跑步', RUN_COLOR]];
+    $('log-filter').innerHTML = options.map(([key, label, color]) => `<button class="chip" type="button" data-filter="${key}" aria-pressed="${state.logFilter === key}">${color ? plate(color) : ''}${label}</button>`).join('');
+  }
+  function logDays() {
+    const start = rangeStart(), filter = state.logFilter, days = new Map();
+    const day = date => {
+      if (!days.has(date)) days.set(date, { date, lifts: { squat: [], bench: [], deadlift: [] }, runs: [] });
+      return days.get(date);
+    };
+    for (const record of state.records) {
+      if ((filter !== 'all' && filter !== record.lift) || (record.date && start && record.date < start)) continue;
+      day(record.date || '').lifts[record.lift].push(record);
+    }
+    for (const run of state.runs) {
+      if ((filter !== 'all' && filter !== 'run') || (run.date && start && run.date < start)) continue;
+      day(run.date || '').runs.push(run);
+    }
+    return [...days.values()].sort((a, b) => b.date.localeCompare(a.date));
+  }
+  function setChip(record) {
+    const weight = record.weight != null ? fmt(record.weight) : escape(record.weightRaw || '?');
+    const reps = record.reps ?? escape(record.repsRaw || '?'), sets = record.sets ?? escape(record.setsRaw || '?');
+    const band = rpeBand(record.rpe);
+    const rpe = record.rpeRaw ? `<span class="rpe ${band}" title="RPE ${escape(record.rpeRaw)}${band ? ` · ${RPE_LABEL[band]}` : ''}">${escape(record.rpeRaw)}</span>` : '';
+    return `<span class="set${rpe ? '' : ' plain'}">${weight}<small>kg</small> × ${reps}${sets !== 1 ? ` × ${sets}` : ''}${rpe}</span>`;
+  }
+  function exerciseBlock(name, records) {
+    const first = records[0];
+    const tags = `${first.partialRange ? '<span class="tag">半程</span>' : ''}${first.accessory ? '<span class="tag">辅助</span>' : ''}`;
+    const notes = [...new Set(records.map(record => record.note).filter(Boolean))].map(note => `<div class="entry-note">${escape(note)}</div>`).join('');
+    const marks = [...new Set(records.map(record => record.manualMax).filter(Boolean))].map(mark => `<div class="entry-note">原表标注：${escape(mark)}</div>`).join('');
+    const issues = [...new Set(records.flatMap(record => record.issues))].map(issue => `<div class="entry-issue">${escape(issue)}</div>`).join('');
+    return `<div class="exercise"><div class="exercise-name">${escape(name)}${tags}</div><div class="sets">${records.map(setChip).join('')}</div>${notes}${marks}${issues}</div>`;
+  }
+  function liftGroup(lift, records) {
+    if (!records.length) return '';
+    const exercises = [];
+    for (const record of [...records].sort((a, b) => a.row - b.row)) {
+      const last = exercises.at(-1);
+      if (last && last.name === record.exercise) last.records.push(record);
+      else exercises.push({ name: record.exercise, records: [record] });
+    }
+    return `<div class="lift-group"><div class="lift-label">${plate(lift.color)}${lift.name}</div>${exercises.map(item => exerciseBlock(item.name, item.records)).join('')}</div>`;
+  }
+  function runGroup(runs) {
+    if (!runs.length) return '';
+    return `<div class="lift-group"><div class="lift-label">${plate(RUN_COLOR)}跑步</div>${runs.map(run => `<div class="exercise"><div class="sets"><span class="set plain">${run.distance != null ? fmt(run.distance, 2) : '?'}<small>km</small></span>${run.seconds ? `<span class="set plain">${clock(run.seconds)}</span>` : ''}${run.pace ? `<span class="set plain">${pace(run.pace)}<small>/km</small></span>` : ''}</div>${run.note ? `<div class="entry-note">${escape(run.note)}</div>` : ''}${run.issues.map(issue => `<div class="entry-issue">${escape(issue)}</div>`).join('')}</div>`).join('')}</div>`;
+  }
+  function dayCard(day) {
+    const lifting = LIFTS.flatMap(lift => day.lifts[lift.key]).filter(record => record.valid);
+    const sets = lifting.reduce((sum, record) => sum + record.sets, 0), volume = lifting.reduce((sum, record) => sum + record.volume, 0);
+    const km = day.runs.reduce((sum, run) => sum + (run.distance || 0), 0);
+    const meta = [lifting.length ? `${fmt(sets, 0)} 组 · ${fmt(volume, 0)} kg` : '', day.runs.length ? `跑步 ${fmt(km)} km` : ''].filter(Boolean).join(' · ');
+    const year = day.date && day.date.slice(0, 4) !== localToday().slice(0, 4) ? ` · ${day.date.slice(0, 4)}` : '';
+    const title = day.date ? `${monthDay(day.date)}<span>${weekday(day.date)}${year}</span>` : '日期待确认';
+    return `<article class="day" id="day-${day.date || 'undated'}"><div class="day-head"><div class="day-date">${title}</div><div class="day-meta">${meta}</div></div>${LIFTS.map(lift => liftGroup(lift, day.lifts[lift.key])).join('')}${runGroup(day.runs)}</article>`;
+  }
+  function renderLog() {
+    const days = logDays(), shown = days.slice(0, state.logDays);
+    $('history-caption').textContent = days.length ? `${RANGE_LABEL[state.range]} · ${days.length} 个训练日，最新的在前` : RANGE_LABEL[state.range];
+    $('log').innerHTML = shown.length ? shown.map(dayCard).join('') : `<div class="log-empty">${state.loaded ? '这个范围内没有记录' : '载入记录后显示训练日志'}<span>${state.loaded ? '换个时间范围或筛选条件看看' : ''}</span></div>`;
+    $('show-more').hidden = days.length <= state.logDays;
+    $('show-more').textContent = `显示更多（还有 ${days.length - shown.length} 天）`;
+  }
+  function gotoDay(date) {
+    if (state.logFilter !== 'all') { state.logFilter = 'all'; renderLogFilter(); }
+    const index = logDays().findIndex(day => day.date === date);
+    if (index >= state.logDays) state.logDays = index + 1;
+    renderLog();
+    const card = document.getElementById(`day-${date}`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 1600);
+  }
+
   function renderQuality() {
-    $('data-quality').hidden = !state.warnings.length && !state.dateCorrections.length;
-    const invalid = state.records.filter(record => !record.valid).length;
-    const undated = state.records.filter(record => !record.date).length;
-    const summaries = [];
-    if (state.dateCorrections.length) summaries.push(`${state.dateCorrections.length} 处历史日期已按记录顺序校正`);
-    if (invalid) summaries.push(`${invalid} 行无效数值未计入统计`);
-    if (undated) summaries.push(`${undated} 行日期仍待确认`);
-    if (!summaries.length && state.warnings.length) summaries.push(`${state.warnings.length} 条数据提示`);
-    $('quality-summary').textContent = summaries.join(' · ');
+    const invalid = state.records.filter(record => !record.valid).length + state.runs.filter(run => !run.valid).length;
+    const undated = state.records.filter(record => !record.date).length + state.runs.filter(run => !run.date).length;
+    const parts = [];
+    if (state.dateCorrections.length) parts.push(`${state.dateCorrections.length} 处历史日期已按记录顺序校正`);
+    if (invalid) parts.push(`${invalid} 行数值不完整，未计入统计`);
+    if (undated) parts.push(`${undated} 行日期待确认`);
+    if (!parts.length && state.warnings.length) parts.push(`${state.warnings.length} 条数据提示`);
+    $('data-quality').hidden = !parts.length;
+    $('quality-summary').textContent = `数据提示：${parts.join(' · ')}`;
     $('date-corrections').hidden = !state.dateCorrections.length;
-    $('date-correction-list').innerHTML = state.dateCorrections.map(correction => `<li><strong>${escape(correction.sheet)} · A${correction.row}</strong>：${escape(correction.from)} → ${escape(correction.to)}<span>（${escape(correction.reason)}）</span></li>`).join('');
-    $('quality-list').innerHTML = state.warnings.map(warning => `<li>${escape(warning.sheet)}${warning.row ? ` · 第 ${warning.row} 行` : ''}：${escape(warning.message)}</li>`).join('');
+    $('date-correction-list').innerHTML = state.dateCorrections.map(item => `<li>${escape(item.sheet)} · A${item.row}：${escape(item.from)} → ${escape(item.to)}（${escape(item.reason)}）</li>`).join('');
+    $('quality-list').innerHTML = state.warnings.map(item => `<li>${escape(item.sheet)}${item.row ? ` 第 ${item.row} 行` : ''}：${escape(item.message)}</li>`).join('');
   }
-  function render() { renderCards(); renderChart(); renderRhythm(); renderRuns(); renderRecords(); renderQuality(); }
-  async function loadBuffer(buffer, name, source) {
-    const workbook = await window.PowerLogXlsx.readWorkbook(buffer);
-    loadData(workbook, name, source);
+
+  function render() {
+    renderHeader();
+    renderHero();
+    renderLiftSwitch();
+    renderTrend();
+    renderCalendar();
+    renderRunning();
+    renderLogFilter();
+    renderLog();
+    renderQuality();
   }
-  function loadData(workbook, name, source) {
-    state.records = workbook.records;
-    state.runs = workbook.runs || [];
-    state.warnings = workbook.warnings;
-    state.dateCorrections = workbook.dateCorrections || [];
-    state.loaded = true;
-    state.source = source;
-    state.limit = 10;
-    state.runLimit = 8;
-    const counts = `${workbook.sheets.length} 张工作表 · ${workbook.records.length} 条记录${state.runs.length ? ` · ${state.runs.length} 次跑步` : ''}`;
-    $('source-name').textContent = name;
-    $('source-status').textContent = source === 'snapshot' ? '已发布副本' : '已读取';
-    $('source-status').classList.remove('error');
-    $('source-detail').textContent = `${counts} · ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 读取${state.dateCorrections.length ? ` · 已统一 ${state.dateCorrections.length} 处历史日期` : ''}${source === 'file' ? ' · 更新后请重新选择文件' : ''}`;
-    if (source === 'snapshot') $('source-detail').textContent = `${counts} · 数据生成于 ${new Date(workbook.generatedAt).toLocaleString('zh-CN', { timeZone: 'Australia/Sydney', hour12: false })}（悉尼）`;
-    setNotice();
+
+  // Horizontal scrubbing on charts: mouse hover, touch drag (vertical swipes still scroll) and arrow keys.
+  function bindScrub(box, positions, current, select) {
+    const nearest = clientX => {
+      const xs = positions();
+      if (!xs.length) return null;
+      const x = clientX - box.getBoundingClientRect().left;
+      let low = 0, high = xs.length - 1;
+      while (low < high) { const middle = (low + high) >> 1; if (xs[middle] < x) low = middle + 1; else high = middle; }
+      return low > 0 && Math.abs(xs[low - 1] - x) <= Math.abs(xs[low] - x) ? low - 1 : low;
+    };
+    let dragging = false;
+    box.addEventListener('pointerdown', event => { const index = nearest(event.clientX); if (index == null) return; dragging = true; select(index, true); });
+    box.addEventListener('pointermove', event => { if (event.pointerType !== 'mouse' && !dragging) return; const index = nearest(event.clientX); if (index != null) select(index, true); });
+    const stop = event => { dragging = false; if (event.pointerType !== 'mouse') hideTooltip(box); };
+    box.addEventListener('pointerup', stop);
+    box.addEventListener('pointercancel', stop);
+    box.addEventListener('pointerleave', event => { dragging = false; if (event.pointerType === 'mouse') hideTooltip(box); });
+    box.addEventListener('keydown', event => {
+      const count = positions().length;
+      if (!count) return;
+      const index = current() ?? count - 1;
+      const next = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: count - 1 }[event.key];
+      if (next == null) return;
+      event.preventDefault();
+      select(Math.min(Math.max(next, 0), count - 1), true);
+    });
+  }
+  const hideTooltip = box => { const tip = box.querySelector('.tooltip'); if (tip) tip.hidden = true; };
+
+  function setNotice(message = '', error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
+  function setBusy(value) { state.busy = value; document.body.classList.toggle('busy', value); $('import').disabled = value; $('refresh').disabled = value; }
+  async function loadBuffer(buffer, source) { loadData(await window.PowerLogXlsx.readWorkbook(buffer), source); }
+  function loadData(workbook, source) {
+    Object.assign(state, {
+      records: workbook.records, runs: workbook.runs || [], warnings: workbook.warnings, dateCorrections: workbook.dateCorrections || [],
+      loaded: true, source, readAt: new Date(), generatedAt: workbook.generatedAt || null, trendIndex: null, calendarDate: null, runWeek: null, logDays: 10
+    });
+    setNotice(source === 'file' ? '已读取所选文件。Excel 更新后，需要重新选择文件。' : '');
     render();
   }
   function showError(error) {
     setNotice(`${error.message || '读取失败，请重试。'}${state.loaded ? ' 页面保留上次成功读取的数据。' : ''}`, true);
-    $('source-status').textContent = state.loaded ? '刷新未成功' : '尚未读取';
-    $('source-status').classList.add('error');
-    if (!state.loaded) $('source-detail').textContent = '请选择有效的 XLSX 训练工作簿';
+    if (!state.loaded) $('source-detail').textContent = '尚未读取训练记录';
   }
   async function chooseFile() {
     if (state.busy) return;
@@ -233,8 +575,7 @@
       setBusy(true);
       try {
         const [handle] = await window.showOpenFilePicker({ multiple: false, types: [{ description: 'Excel 训练工作簿', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }] });
-        const file = await handle.getFile();
-        await loadBuffer(await file.arrayBuffer(), file.name, 'handle');
+        await loadBuffer(await (await handle.getFile()).arrayBuffer(), 'handle');
         state.handle = handle;
       } catch (error) {
         if (error.name !== 'AbortError') {
@@ -252,19 +593,89 @@
         if (!response.ok) throw new Error(`训练数据未能加载（HTTP ${response.status}），请稍后刷新。`);
         const workbook = await response.json();
         if (workbook.schemaVersion !== 1 || !Array.isArray(workbook.records) || !Array.isArray(workbook.sheets) || !Array.isArray(workbook.warnings) || (workbook.runs != null && !Array.isArray(workbook.runs)) || !Number.isFinite(Date.parse(workbook.generatedAt))) throw new Error('训练数据格式无效，请重新发布页面。');
-        loadData(workbook, 'HylPowerliftingTraining.xlsx · 私人网页副本', 'snapshot');
+        loadData(workbook, 'snapshot');
         state.handle = null;
         return;
       }
       const response = await fetch(new URL('HylPowerliftingTraining.xlsx', window.location.href), { cache: 'no-store' });
       if (!response.ok) throw new Error(`没有读到目录中的工作簿（HTTP ${response.status}），请点击“选择工作簿”。`);
-      const length = Number(response.headers.get('Content-Length'));
-      if (length > 50 * 1024 * 1024) throw new Error('工作簿超过 50 MB，请选择较小的文件。');
-      await loadBuffer(await response.arrayBuffer(), 'HylPowerliftingTraining.xlsx', 'server');
+      if (Number(response.headers.get('Content-Length')) > 50 * 1024 * 1024) throw new Error('工作簿超过 50 MB，请选择较小的文件。');
+      await loadBuffer(await response.arrayBuffer(), 'server');
       state.handle = null;
     } catch (error) { showError(initial && error instanceof TypeError ? new Error('无法自动读取目录中的工作簿，请点击“选择工作簿”。') : error); }
     finally { setBusy(false); }
   }
+
+  function selectLift(key, reveal) {
+    if (!LIFT[key]) return;
+    state.lift = key;
+    state.trendIndex = null;
+    document.querySelectorAll('.lift-tile, #lift-switch .chip').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.lift === key)));
+    renderTrend();
+    const card = $('progress'), rect = card.getBoundingClientRect();
+    if (reveal && (rect.top > window.innerHeight * 0.55 || rect.bottom < 80)) card.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+  }
+  $('lift-tiles').addEventListener('click', event => { const tile = event.target.closest('[data-lift]'); if (tile) selectLift(tile.dataset.lift, true); });
+  $('lift-switch').addEventListener('click', event => { const chip = event.target.closest('[data-lift]'); if (chip) selectLift(chip.dataset.lift, false); });
+  $('metric-switch').addEventListener('click', event => {
+    const button = event.target.closest('[data-metric]');
+    if (!button) return;
+    state.metric = button.dataset.metric;
+    state.trendIndex = null;
+    $('metric-switch').querySelectorAll('button').forEach(other => other.setAttribute('aria-pressed', String(other === button)));
+    renderTrend();
+  });
+  $('range-chips').addEventListener('click', event => {
+    const button = event.target.closest('[data-range]');
+    if (!button) return;
+    state.range = button.dataset.range;
+    Object.assign(state, { trendIndex: null, calendarDate: null, runWeek: null, logDays: 10 });
+    $('range-chips').querySelectorAll('button').forEach(other => other.setAttribute('aria-pressed', String(other === button)));
+    renderTrend();
+    renderCalendar();
+    renderRunning();
+    renderLog();
+  });
+  $('log-filter').addEventListener('click', event => {
+    const button = event.target.closest('[data-filter]');
+    if (!button) return;
+    state.logFilter = button.dataset.filter;
+    state.logDays = 10;
+    renderLogFilter();
+    renderLog();
+  });
+  $('show-more').addEventListener('click', () => { state.logDays += 15; renderLog(); });
+  document.addEventListener('click', event => { const link = event.target.closest('[data-goto]'); if (link) gotoDay(link.dataset.goto); });
+  $('calendar').addEventListener('click', event => { const cell = event.target.closest('[data-date]'); if (cell) selectCalendarDate(cell.dataset.date, false); });
+  $('calendar').addEventListener('keydown', event => {
+    const shift = { ArrowUp: -1, ArrowDown: 1, ArrowLeft: -7, ArrowRight: 7 }[event.key];
+    if (!shift || !state.calendarDate) return;
+    event.preventDefault();
+    const next = isoDate(time(state.calendarDate) + shift * DAY);
+    if (next >= view.calendarFirst && next <= localToday()) selectCalendarDate(next, true);
+  });
+  bindScrub($('trend-chart'), () => view.trendGeometry?.xs ?? [], () => state.trendIndex, index => { state.trendIndex = index; showTrendSelection(true); });
+  bindScrub($('run-chart'), () => view.runXs, () => view.weeks.findIndex(item => item.week === state.runWeek), index => {
+    if (view.weeks[index].week === state.runWeek) return;
+    state.runWeek = view.weeks[index].week;
+    drawRunChart();
+    renderRunReadout();
+  });
+
+  // Charts are drawn at their real width, so redraw when the width changes.
+  const widths = new Map();
+  const redraw = target => { if (!state.loaded) return; if (target.id === 'trend-chart') drawTrend(); else drawRunChart(); };
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(entries => entries.forEach(entry => {
+      const width = Math.round(entry.contentRect.width);
+      if (widths.get(entry.target) === width) return;
+      widths.set(entry.target, width);
+      redraw(entry.target);
+    }));
+    observer.observe($('trend-chart'));
+    observer.observe($('run-chart'));
+  } else window.addEventListener('resize', () => { redraw($('trend-chart')); redraw($('run-chart')); });
+
   $('import').addEventListener('click', chooseFile);
   $('file-input').addEventListener('change', async event => {
     const file = event.target.files[0];
@@ -272,7 +683,7 @@
     setBusy(true);
     try {
       if (file.size > 50 * 1024 * 1024) throw new Error('请选择 50 MB 以内的 XLSX 文件。');
-      await loadBuffer(await file.arrayBuffer(), file.name, 'file');
+      await loadBuffer(await file.arrayBuffer(), 'file');
       state.handle = null;
     } catch (error) { showError(error); }
     finally { event.target.value = ''; setBusy(false); }
@@ -281,28 +692,19 @@
     if (state.busy) return;
     if (state.handle) {
       setBusy(true);
-      try { const file = await state.handle.getFile(); await loadBuffer(await file.arrayBuffer(), file.name, 'handle'); }
+      try { await loadBuffer(await (await state.handle.getFile()).arrayBuffer(), 'handle'); }
       catch (error) { showError(new Error(`未能重新读取已选文件，请再次选择工作簿。${error.message ? `（${error.message}）` : ''}`)); }
       finally { setBusy(false); }
-    } else if (state.source === 'server' || state.source === 'snapshot' || (!state.source && location.protocol !== 'file:')) await fetchWorkbook();
-    else { setNotice('请重新选择更新后的工作簿。浏览器需要你再次选择文件，才能读取磁盘上的最新内容。'); await chooseFile(); }
+    } else if (state.source === 'server' || state.source === 'snapshot' || (!state.source && !fileMode)) await fetchWorkbook();
+    else { setNotice('浏览器需要你再次选择文件，才能读取磁盘上的最新内容。'); await chooseFile(); }
   });
-  document.querySelectorAll('[data-lift]').forEach(button => button.addEventListener('click', () => {
-    state.lift = button.dataset.lift;
-    document.querySelectorAll('[data-lift]').forEach(other => { other.classList.toggle('selected', other === button); other.setAttribute('aria-pressed', String(other === button)); });
-    renderChart();
-  }));
-  $('chart-metric').addEventListener('change', event => { state.metric = event.target.value; renderChart(); });
-  $('range').addEventListener('change', event => { state.range = event.target.value; state.limit = 10; $('custom-dates').hidden = state.range !== 'custom'; renderChart(); renderRhythm(); renderRecords(); });
-  ['date-start', 'date-end'].forEach(id => $(id).addEventListener('change', () => { state.limit = 10; renderChart(); renderRhythm(); renderRecords(); }));
-  $('record-lift').addEventListener('change', event => { state.recordLift = event.target.value; state.limit = 10; renderRecords(); });
-  $('show-more').addEventListener('click', () => { state.limit += 20; renderRecords(); });
-  $('show-more-runs').addEventListener('click', () => { state.runLimit += 20; renderRuns(); });
-  document.querySelectorAll('.nav-link').forEach(link => link.addEventListener('click', () => { document.querySelectorAll('.nav-link').forEach(other => other.classList.toggle('active', other === link)); }));
+
+  if (snapshotMode) {
+    $('chat-tip-text').innerHTML = '练完把训练发到 PowerLog 聊天，比如 <code>10.12 深蹲 160*5*3@8</code> 或 <code>10.12 跑步 10km 52:30</code>。助手写入 Excel 并重新发布后，点右上角刷新。';
+  } else $('import').hidden = false;
   render();
-  if (location.protocol === 'file:') {
-    $('source-detail').textContent = '点击“选择工作簿”，从你的电脑读取训练数据';
-    $('source-status').textContent = '等待选择';
-    setNotice('本地文件模式：选择工作簿后即可查看。所有数据只在浏览器中读取；聊天更新 Excel 后，再次刷新读取。');
+  if (fileMode) {
+    $('source-detail').textContent = '等待选择工作簿';
+    setNotice('本地文件模式：点右上角“选择工作簿”读取 Excel，数据只在浏览器里读取。');
   } else fetchWorkbook(true);
 })();
