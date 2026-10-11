@@ -13,7 +13,7 @@ import sys
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
-from .workbook import NS, RUN_SHEET, SHEETS, sheet_paths
+from .workbook import CARDIO_SHEET, NS, SHEETS, sheet_paths
 
 
 def read_rows(path: Path) -> dict:
@@ -31,9 +31,9 @@ def read_rows(path: Path) -> dict:
             if name not in paths:
                 raise ValueError(f"缺少工作表：{name}，停止生成手机数据。")
             sheets.append({"name": name, "rows": _sheet_rows(archive.read(paths[name]), strings, cell_formats)})
-        # The Running sheet is optional: it appears with the first recorded run.
-        runs = {"name": RUN_SHEET, "rows": _sheet_rows(archive.read(paths[RUN_SHEET]), strings, cell_formats)} if RUN_SHEET in paths else None
-    return {"sheets": sheets, "runs": runs, "date1904": date1904, "sourceSha256": hashlib.sha256(data).hexdigest()}
+        # The Cardio sheet is optional: it appears with the first recorded session.
+        cardio = {"name": CARDIO_SHEET, "rows": _sheet_rows(archive.read(paths[CARDIO_SHEET]), strings, cell_formats)} if CARDIO_SHEET in paths else None
+    return {"sheets": sheets, "cardio": cardio, "date1904": date1904, "sourceSha256": hashlib.sha256(data).hexdigest()}
 
 
 def _sheet_rows(sheet_xml: bytes, strings: list[str], cell_formats: list[str]) -> list[dict]:

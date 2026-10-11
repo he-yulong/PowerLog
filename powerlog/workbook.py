@@ -23,9 +23,9 @@ NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 RID = "{" + REL_NS + "}id"
 SHEETS = {"S": "2025-S", "B": "2025-B", "D": "2025-D"}
-# Runs live in their own sheet: A date, B distance km, C time, D notes.
-RUN_SHEET = "Running"
-RUN_HEADERS = ("Date", "Distance (km)", "Time", "Notes")
+# Cardio sessions live in their own sheet: A date, B activity, C distance km, D time, E calories kcal, F notes.
+CARDIO_SHEET = "Cardio"
+CARDIO_HEADERS = ("Date", "Activity", "Distance (km)", "Time", "Calories (kcal)", "Notes")
 
 
 class WorkbookError(ValueError):
@@ -285,48 +285,57 @@ def _duration_seconds(value: str) -> int | None:
     return None
 
 
-def normalize_runs(runs: list[dict]) -> list[dict]:
-    if not isinstance(runs, list) or not runs or len(runs) > 500:
-        raise WorkbookError("请提供 1–500 条跑步记录。")
+def normalize_cardio(sessions: list[dict]) -> list[dict]:
+    if not isinstance(sessions, list) or not sessions or len(sessions) > 500:
+        raise WorkbookError("请提供 1–500 条有氧记录。")
     result = []
-    for run in runs:
-        if not isinstance(run, dict):
-            raise WorkbookError("每条跑步记录必须是对象。")
-        unknown = set(run) - {"date", "distance_km", "duration", "notes"}
+    for session in sessions:
+        if not isinstance(session, dict):
+            raise WorkbookError("每条有氧记录必须是对象。")
+        unknown = set(session) - {"date", "activity", "distance_km", "duration", "calories_kcal", "notes"}
         if unknown:
             raise WorkbookError("未知字段：" + ", ".join(sorted(unknown)))
         try:
-            day = date.fromisoformat(run["date"])
+            day = date.fromisoformat(session["date"])
         except (KeyError, ValueError, TypeError):
             raise WorkbookError("日期必须是完整的 YYYY-MM-DD。") from None
         if not 1900 <= day.year <= 2100:
-            raise WorkbookError("请检查跑步年份（支持 1900–2100）。")
-        distance = run.get("distance_km")
-        if isinstance(distance, bool) or not isinstance(distance, (int, float)) or not math.isfinite(distance) or not 0 < distance <= 1000:
+            raise WorkbookError("请检查有氧记录的年份（支持 1900–2100）。")
+        activity = session.get("activity")
+        if not isinstance(activity, str) or not activity.strip() or len(activity) > 100 or re.search(r"[\x00-\x1f]", activity):
+            raise WorkbookError("activity 必须是有效的英文项目名，例如 Run、Stair Climber。")
+        distance = session.get("distance_km")
+        if distance is not None and (isinstance(distance, bool) or not isinstance(distance, (int, float)) or not math.isfinite(distance) or not 0 < distance <= 1000):
             raise WorkbookError("distance_km 必须是 0–1000 之间的公里数。")
-        duration = run.get("duration")
+        duration = session.get("duration")
         if duration is not None:
             seconds = _duration_seconds(duration.strip()) if isinstance(duration, str) else None
             if not seconds or seconds >= 86400:
                 raise WorkbookError("duration 必须是 h:mm:ss 或 mm:ss，且不超过 24 小时。")
             duration = f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
-        notes = run.get("notes", "")
+        calories = session.get("calories_kcal")
+        if calories is not None and (isinstance(calories, bool) or not isinstance(calories, (int, float)) or not math.isfinite(calories) or not 0 < calories <= 20000):
+            raise WorkbookError("calories_kcal 必须是 0–20000 之间的大卡数。")
+        if distance is None and duration is None and calories is None:
+            raise WorkbookError("距离、用时、热量至少要有一项。")
+        notes = session.get("notes", "")
         if not isinstance(notes, str) or len(notes) > 2000 or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", notes):
             raise WorkbookError("notes 必须是有效的文字，最长 2000 字。")
-        result.append({"date": day.isoformat(), "distance_km": float(distance), "duration": duration, "notes": notes.strip()})
+        result.append({"date": day.isoformat(), "activity": activity.strip(), "distance_km": None if distance is None else float(distance),
+                       "duration": duration, "calories_kcal": None if calories is None else float(calories), "notes": notes.strip()})
     return result
 
 
-def _run_sheet_xml() -> str:
-    """An empty Running sheet with title and header rows styled like the lift sheets."""
-    header = "".join(f'<c r="{column}2" s="{6 if column == "A" else 3}" t="inlineStr"><is><t>{escape(title)}</t></is></c>' for column, title in zip("ABCD", RUN_HEADERS))
+def _cardio_sheet_xml() -> str:
+    """An empty Cardio sheet with title and header rows styled like the lift sheets."""
+    header = "".join(f'<c r="{column}2" s="{6 if column == "A" else 3}" t="inlineStr"><is><t>{escape(title)}</t></is></c>' for column, title in zip("ABCDEF", CARDIO_HEADERS))
+    widths = (15.28515625, 16.7109375, 13.7109375, 10.7109375, 15.7109375, 26.85546875)
+    cols = "".join(f'<col min="{n}" max="{n}" width="{w}" customWidth="1"/>' for n, w in enumerate(widths, 1))
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            f'<worksheet xmlns="{NS["m"]}" xmlns:r="{REL_NS}"><dimension ref="A1:D2"/>'
-            '<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>'
-            '<cols><col min="1" max="1" width="15.28515625" customWidth="1"/><col min="2" max="2" width="13.7109375" customWidth="1"/>'
-            '<col min="3" max="3" width="10.7109375" customWidth="1"/><col min="4" max="4" width="26.85546875" customWidth="1"/></cols>'
-            f'<sheetData><row r="1" spans="1:4"><c r="A1" s="33" t="inlineStr"><is><t>RUNNING</t></is></c></row>'
-            f'<row r="2" spans="1:4" s="4" customFormat="1">{header}</row></sheetData>'
+            f'<worksheet xmlns="{NS["m"]}" xmlns:r="{REL_NS}"><dimension ref="A1:F2"/>'
+            f'<sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>{cols}</cols>'
+            f'<sheetData><row r="1" spans="1:6"><c r="A1" s="33" t="inlineStr"><is><t>CARDIO</t></is></c></row>'
+            f'<row r="2" spans="1:6" s="4" customFormat="1">{header}</row></sheetData>'
             '<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>')
 
 
@@ -359,25 +368,26 @@ def _add_worksheet(source: ZipFile, changed: dict[str, bytes], name: str, sheet_
     return part
 
 
-def build_run_update(path: Path, runs: list[dict], destination: Path) -> list[dict]:
-    """Append runs to the Running sheet, creating that sheet on first use."""
+def build_cardio_update(path: Path, sessions: list[dict], destination: Path) -> list[dict]:
+    """Append sessions to the Cardio sheet, creating that sheet on first use."""
     with ZipFile(path) as source:
         paths, is_1904 = sheet_paths(source)
         changed = {}
-        part = paths[RUN_SHEET] if RUN_SHEET in paths else _add_worksheet(source, changed, RUN_SHEET, _run_sheet_xml())
+        part = paths[CARDIO_SHEET] if CARDIO_SHEET in paths else _add_worksheet(source, changed, CARDIO_SHEET, _cardio_sheet_xml())
         styles, date_style = _date_style(source.read("xl/styles.xml"))
         styles, time_styles = _number_format_variants(styles, {32}, "[h]:mm:ss")
         changed["xl/styles.xml"] = styles
         text = (changed[part] if part in changed else source.read(part)).decode("utf-8")
-        values = [[excel_date(r["date"], is_1904), r["distance_km"], _duration_seconds(r["duration"]) / 86400 if r["duration"] else None, r["notes"]] for r in runs]
-        text, rows = _append_rows(text, RUN_SHEET, values, [date_style, 32, time_styles[32], 32])
+        values = [[excel_date(r["date"], is_1904), r["activity"], r["distance_km"], _duration_seconds(r["duration"]) / 86400 if r["duration"] else None,
+                   r["calories_kcal"], r["notes"]] for r in sessions]
+        text, rows = _append_rows(text, CARDIO_SHEET, values, [date_style, 32, 32, time_styles[32], 32, 32])
         changed[part] = text.encode("utf-8")
         _write_candidate(source, destination, changed)
     _check_candidate(destination, changed)
     with ZipFile(destination) as check:
-        if RUN_SHEET not in sheet_paths(check)[0]:
-            raise WorkbookError("生成的文件中没有 Running 工作表。")
-    return [{"sheet": RUN_SHEET, "range": f"A{row}:D{row}", "record": run} for row, run in zip(rows, runs)]
+        if CARDIO_SHEET not in sheet_paths(check)[0]:
+            raise WorkbookError("生成的文件中没有 Cardio 工作表。")
+    return [{"sheet": CARDIO_SHEET, "range": f"A{row}:F{row}", "record": session} for row, session in zip(rows, sessions)]
 
 
 def _text_of(cell: str, strings: list[str]) -> str:
@@ -562,9 +572,9 @@ def append_records(path: Path | str, records: list[dict], *, dry_run: bool = Fal
     return _append(Path(path).resolve(), normalize_records(records), build_update, dry_run, request_id, allow_duplicate)
 
 
-def append_runs(path: Path | str, runs: list[dict], *, dry_run: bool = False, request_id: str | None = None, allow_duplicate: bool = False) -> dict:
-    """Append runs to the Running sheet (created on first use), with the same safety as lift records."""
-    return _append(Path(path).resolve(), normalize_runs(runs), build_run_update, dry_run, request_id, allow_duplicate)
+def append_cardio(path: Path | str, sessions: list[dict], *, dry_run: bool = False, request_id: str | None = None, allow_duplicate: bool = False) -> dict:
+    """Append cardio sessions to the Cardio sheet (created on first use), with the same safety as lift records."""
+    return _append(Path(path).resolve(), normalize_cardio(sessions), build_cardio_update, dry_run, request_id, allow_duplicate)
 
 
 def _append(path: Path, records: list[dict], build, dry_run: bool, request_id: str | None, allow_duplicate: bool) -> dict:

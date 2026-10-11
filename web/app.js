@@ -21,7 +21,7 @@
   const RPE_LABEL = { easy: '轻松', moderate: '中等', hard: '吃力', 'very-hard': '很吃力', max: '极限' };
   const DAY = 86400000;
   const state = {
-    records: [], runs: [], warnings: [], dateCorrections: [], lift: 'squat', metric: 'weight', range: '90', logFilter: 'all', logDays: 10,
+    records: [], cardio: [], warnings: [], dateCorrections: [], lift: 'squat', metric: 'weight', range: '90', logFilter: 'all', logDays: 10,
     trendIndex: null, calendarDate: null, runWeek: null, handle: null, source: null, busy: false, loaded: false, readAt: null, generatedAt: null
   };
   // Inputs of the drawn charts, kept so a resize or a new selection redraws without recomputing.
@@ -109,7 +109,7 @@
     if (!state.loaded) return;
     const snapshot = state.source === 'snapshot' && state.generatedAt;
     $('source-detail').textContent = snapshot ? `数据更新于 ${stamp(new Date(state.generatedAt))}` : `读取于 ${stamp(state.readAt)}`;
-    const counts = `共 ${fmt(state.records.length, 0)} 条力量记录${state.runs.length ? `、${fmt(state.runs.length, 0)} 次跑步` : ''}`;
+    const counts = `共 ${fmt(state.records.length, 0)} 条力量记录${state.cardio.length ? `、${fmt(state.cardio.length, 0)} 次有氧` : ''}`;
     $('footer-text').textContent = snapshot ? `${counts} · 私人只读页面，数据以最近一次发布为准` : `${counts} · 数据只在这台电脑的浏览器里读取，不上传`;
   }
 
@@ -271,7 +271,7 @@
   function calendarDays(start) {
     const days = new Map();
     const entry = date => {
-      if (!days.has(date)) days.set(date, { date, sets: { squat: 0, bench: 0, deadlift: 0 }, total: 0, volume: 0, km: 0, runs: 0 });
+      if (!days.has(date)) days.set(date, { date, sets: { squat: 0, bench: 0, deadlift: 0 }, total: 0, volume: 0, km: 0, cardio: [] });
       return days.get(date);
     };
     for (const record of state.records) {
@@ -281,11 +281,11 @@
       day.total += record.sets;
       day.volume += record.volume;
     }
-    for (const run of state.runs) {
-      if (!run.valid || !run.date || (start && run.date < start)) continue;
-      const day = entry(run.date);
-      day.km += run.distance;
-      day.runs += 1;
+    for (const session of state.cardio) {
+      if (!session.valid || !session.date || (start && session.date < start)) continue;
+      const day = entry(session.date);
+      if (session.run) day.km += session.distance || 0;
+      day.cardio.push(session);
     }
     return days;
   }
@@ -323,9 +323,9 @@
         const day = days.get(date);
         const level = !day || !day.total ? 0 : day.total >= 18 ? 4 : day.total >= 12 ? 3 : day.total >= 6 ? 2 : 1;
         const x = left + week * step, y = top + weekdayIndex * step;
-        const summary = day ? [day.total ? `${day.total} 组` : '', day.runs ? `跑步 ${fmt(day.km)} km` : ''].filter(Boolean).join('，') : '休息';
+        const summary = day ? [day.total ? `${day.total} 组` : '', ...day.cardio.map(cardioText)].filter(Boolean).join('，') : '休息';
         svg += `<rect class="cell h${level}${date === today ? ' today' : ''}" data-date="${date}" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3"><title>${monthDay(date)} ${weekday(date)}：${summary}</title></rect>`;
-        if (day?.runs) svg += `<circle class="run-dot" cx="${x + cell - 3}" cy="${y + cell - 3}" r="3"/>`;
+        if (day?.cardio.length) svg += `<circle class="run-dot" cx="${x + cell - 3}" cy="${y + cell - 3}" r="3"/>`;
       }
     }
     $('calendar').innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(`${RANGE_LABEL[state.range]}训练日历，${lifting.length} 个力量训练日`)}">${svg}</svg>`;
@@ -345,36 +345,45 @@
     if (!state.loaded) { box.hidden = true; return; }
     const items = day ? [
       ...LIFTS.filter(lift => day.sets[lift.key]).map(lift => `<li>${plate(lift.color)}${lift.name} ${day.sets[lift.key]} 组</li>`),
-      day.runs ? `<li>${plate(RUN_COLOR)}跑步 ${fmt(day.km, 2)} km</li>` : ''
+      ...day.cardio.map(session => `<li>${plate(RUN_COLOR)}${escape(cardioText(session))}</li>`)
     ].join('') : '';
     box.innerHTML = `<div class="readout-head"><span>${fullDate(date)} ${weekday(date)}</span><span>${date === localToday() ? '今天' : ''}</span></div>${day ? `<ul class="readout-items">${items}</ul>${day.total ? `<p>训练量 ${fmt(day.volume, 0)}kg</p>` : ''}<button type="button" class="link-button" data-goto="${date}">查看这天的训练${icon('arrow')}</button>` : '<p>这天没有训练记录。</p>'}`;
     box.hidden = false;
   }
 
+  // One line per cardio session, e.g. "Run 12 km · 1:02:30" or "Stair Climber · 400 kcal".
+  function cardioText(session) {
+    const parts = [session.distance ? `${fmt(session.distance, 2)} km` : '', session.seconds ? clock(session.seconds) : '', session.calories ? `${fmt(session.calories, 0)} kcal` : ''].filter(Boolean);
+    return `${session.activity || '有氧'} ${parts.join(' · ')}`.trim();
+  }
   function renderRunning() {
     const start = rangeStart(), today = localToday();
-    const runs = state.runs.filter(run => run.valid && run.date && (!start || run.date >= start)).sort((a, b) => a.date.localeCompare(b.date));
+    const sessions = state.cardio.filter(session => session.valid && session.date && (!start || session.date >= start)).sort((a, b) => a.date.localeCompare(b.date));
+    const runs = sessions.filter(session => session.run && session.distance);
     const total = runs.reduce((sum, run) => sum + run.distance, 0);
+    const calories = sessions.reduce((sum, session) => sum + (session.calories || 0), 0);
     const timed = runs.filter(run => run.seconds);
     const average = timed.length ? timed.reduce((sum, run) => sum + run.seconds, 0) / timed.reduce((sum, run) => sum + run.distance, 0) : null;
     $('running-stats').innerHTML = [
-      stat('里程', runs.length ? fmt(total) : '—', 'km'),
-      stat('次数', runs.length ? fmt(runs.length, 0) : '—', '次'),
-      stat('最长', runs.length ? fmt(Math.max(...runs.map(run => run.distance))) : '—', 'km'),
+      stat('跑步里程', runs.length ? fmt(total) : '—', 'km'),
+      stat('有氧次数', sessions.length ? fmt(sessions.length, 0) : '—', '次'),
+      stat('记录热量', calories ? fmt(calories, 0) : '—', 'kcal'),
       stat('平均配速', average ? pace(average) : '—', average ? '/km' : '')
     ].join('');
-    $('running-caption').textContent = `${RANGE_LABEL[state.range]} · 每周里程，周一为一周开始`;
+    $('running-caption').textContent = `${RANGE_LABEL[state.range]} · 柱子是每周跑步里程，圆点表示那周有其他有氧`;
     view.weeks = [];
-    if (runs.length) {
-      const firstWeek = time(weekStart(start ?? runs[0].date)), lastWeek = time(weekStart(today));
+    if (sessions.length) {
+      const firstWeek = time(weekStart(start ?? sessions[0].date)), lastWeek = time(weekStart(today));
       const count = Math.max(1, Math.round((lastWeek - firstWeek) / (7 * DAY)) + 1);
-      view.weeks = Array.from({ length: count }, (_, index) => ({ week: isoDate(firstWeek + index * 7 * DAY), runs: [], km: 0 }));
+      view.weeks = Array.from({ length: count }, (_, index) => ({ week: isoDate(firstWeek + index * 7 * DAY), sessions: [], km: 0 }));
       const byWeek = new Map(view.weeks.map(item => [item.week, item]));
-      for (const run of runs) {
-        const item = byWeek.get(weekStart(run.date));
-        if (item) { item.runs.push(run); item.km += run.distance; }
+      for (const session of sessions) {
+        const item = byWeek.get(weekStart(session.date));
+        if (!item) continue;
+        item.sessions.push(session);
+        if (session.run) item.km += session.distance || 0;
       }
-      if (!byWeek.has(state.runWeek)) state.runWeek = [...view.weeks].reverse().find(item => item.km > 0)?.week ?? view.weeks.at(-1).week;
+      if (!byWeek.has(state.runWeek)) state.runWeek = [...view.weeks].reverse().find(item => item.sessions.length)?.week ?? view.weeks.at(-1).week;
     }
     drawRunChart();
     renderRunReadout();
@@ -384,7 +393,7 @@
     box.style.setProperty('--series', RUN_COLOR);
     view.runXs = [];
     if (!weeks.length) {
-      box.innerHTML = `<div class="chart-empty">${icon('run')}${state.loaded ? `${RANGE_LABEL[state.range]}没有跑步记录` : '载入记录后显示每周里程'}<span>在聊天里发“10.12 跑步 10km”就能记录</span></div>`;
+      box.innerHTML = `<div class="chart-empty">${icon('run')}${state.loaded ? `${RANGE_LABEL[state.range]}没有有氧记录` : '载入记录后显示每周里程'}<span>在聊天里发“10.12 跑步 10km”或“爬楼机 400 大卡”就能记录</span></div>`;
       return;
     }
     const width = Math.max(260, Math.round(box.clientWidth || 480)), height = 200;
@@ -407,8 +416,9 @@
         svg += `<path class="bar" d="${column(center - barWidth / 2, yOf(item.km), barWidth, base)}"/>`;
         if (barWidth >= 14) svg += `<text class="bar-value" x="${center.toFixed(1)}" y="${(yOf(item.km) - 6).toFixed(1)}" text-anchor="middle">${fmt(item.km)}</text>`;
       }
+      if (item.sessions.some(session => !session.run)) svg += `<circle class="cardio-dot" cx="${center.toFixed(1)}" cy="${(base + 9).toFixed(1)}" r="3.5"/>`;
       if ((weeks.length - 1 - index) % labelEvery === 0) svg += `<text x="${center.toFixed(1)}" y="${height - 8}" text-anchor="middle">${Number(item.week.slice(5, 7))}.${Number(item.week.slice(8, 10))}</text>`;
-      svg += `<rect class="hit" x="${(center - slot / 2).toFixed(1)}" y="${pad.top - 8}" width="${slot.toFixed(1)}" height="${(base - pad.top + 8).toFixed(1)}"><title>${monthDay(item.week)} 起这一周：${fmt(item.km)} km</title></rect>`;
+      svg += `<rect class="hit" x="${(center - slot / 2).toFixed(1)}" y="${pad.top - 8}" width="${slot.toFixed(1)}" height="${(base - pad.top + 8).toFixed(1)}"><title>${monthDay(item.week)} 起这一周：跑步 ${fmt(item.km)} km，有氧 ${item.sessions.length} 次</title></rect>`;
     });
     box.innerHTML = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escape(`每周跑步里程，共 ${weeks.length} 周，最多一周 ${fmt(Math.max(...weeks.map(item => item.km)))} 公里`)}">${svg}</svg>`;
   }
@@ -416,28 +426,28 @@
     const box = $('run-readout'), item = view.weeks.find(week => week.week === state.runWeek);
     if (!item) { box.hidden = true; return; }
     const end = isoDate(time(item.week) + 6 * DAY);
-    const list = item.runs.map(run => `<li>${plate(RUN_COLOR)}${monthDay(run.date)} ${fmt(run.distance, 2)} km${run.seconds ? ` · ${clock(run.seconds)} · ${pace(run.pace)}/km` : ''}</li>`).join('');
-    box.innerHTML = `<div class="readout-head"><span>${monthDay(item.week)} – ${monthDay(end)}</span><span>${item.runs.length} 次</span></div><span class="readout-value">${fmt(item.km)}<small>km</small></span>${list ? `<ul class="readout-items">${list}</ul>` : '<p>这一周没有跑步。</p>'}`;
+    const list = item.sessions.map(session => `<li>${plate(RUN_COLOR)}${monthDay(session.date)} ${escape(cardioText(session))}${session.pace ? ` · ${pace(session.pace)}/km` : ''}</li>`).join('');
+    box.innerHTML = `<div class="readout-head"><span>${monthDay(item.week)} – ${monthDay(end)}</span><span>有氧 ${item.sessions.length} 次</span></div><span class="readout-value">${fmt(item.km)}<small>km 跑步</small></span>${list ? `<ul class="readout-items">${list}</ul>` : '<p>这一周没有有氧训练。</p>'}`;
     box.hidden = false;
   }
 
   function renderLogFilter() {
-    const options = [['all', '全部', null], ...LIFTS.map(lift => [lift.key, lift.name, lift.color]), ['run', '跑步', RUN_COLOR]];
+    const options = [['all', '全部', null], ...LIFTS.map(lift => [lift.key, lift.name, lift.color]), ['cardio', '有氧', RUN_COLOR]];
     $('log-filter').innerHTML = options.map(([key, label, color]) => `<button class="chip" type="button" data-filter="${key}" aria-pressed="${state.logFilter === key}">${color ? plate(color) : ''}${label}</button>`).join('');
   }
   function logDays() {
     const start = rangeStart(), filter = state.logFilter, days = new Map();
     const day = date => {
-      if (!days.has(date)) days.set(date, { date, lifts: { squat: [], bench: [], deadlift: [] }, runs: [] });
+      if (!days.has(date)) days.set(date, { date, lifts: { squat: [], bench: [], deadlift: [] }, cardio: [] });
       return days.get(date);
     };
     for (const record of state.records) {
       if ((filter !== 'all' && filter !== record.lift) || (record.date && start && record.date < start)) continue;
       day(record.date || '').lifts[record.lift].push(record);
     }
-    for (const run of state.runs) {
-      if ((filter !== 'all' && filter !== 'run') || (run.date && start && run.date < start)) continue;
-      day(run.date || '').runs.push(run);
+    for (const session of state.cardio) {
+      if ((filter !== 'all' && filter !== 'cardio') || (session.date && start && session.date < start)) continue;
+      day(session.date || '').cardio.push(session);
     }
     return [...days.values()].sort((a, b) => b.date.localeCompare(a.date));
   }
@@ -466,18 +476,18 @@
     }
     return `<div class="lift-group"><div class="lift-label">${plate(lift.color)}${lift.name}</div>${exercises.map(item => exerciseBlock(item.name, item.records)).join('')}</div>`;
   }
-  function runGroup(runs) {
-    if (!runs.length) return '';
-    return `<div class="lift-group"><div class="lift-label">${plate(RUN_COLOR)}跑步</div>${runs.map(run => `<div class="exercise"><div class="sets"><span class="set plain">${run.distance != null ? fmt(run.distance, 2) : '?'}<small>km</small></span>${run.seconds ? `<span class="set plain">${clock(run.seconds)}</span>` : ''}${run.pace ? `<span class="set plain">${pace(run.pace)}<small>/km</small></span>` : ''}</div>${run.note ? `<div class="entry-note">${escape(run.note)}</div>` : ''}${run.issues.map(issue => `<div class="entry-issue">${escape(issue)}</div>`).join('')}</div>`).join('')}</div>`;
+  function cardioGroup(sessions) {
+    if (!sessions.length) return '';
+    const chip = (value, unit) => `<span class="set plain">${value}${unit ? `<small>${unit}</small>` : ''}</span>`;
+    return `<div class="lift-group"><div class="lift-label">${plate(RUN_COLOR)}有氧</div>${[...sessions].sort((a, b) => a.row - b.row).map(session => `<div class="exercise"><div class="exercise-name">${escape(session.activity || '未写项目')}</div><div class="sets">${session.distance ? chip(fmt(session.distance, 2), 'km') : ''}${session.seconds ? chip(clock(session.seconds)) : ''}${session.pace ? chip(pace(session.pace), '/km') : ''}${session.calories ? chip(fmt(session.calories, 0), 'kcal') : ''}</div>${session.note ? `<div class="entry-note">${escape(session.note)}</div>` : ''}${session.issues.map(issue => `<div class="entry-issue">${escape(issue)}</div>`).join('')}</div>`).join('')}</div>`;
   }
   function dayCard(day) {
     const lifting = LIFTS.flatMap(lift => day.lifts[lift.key]).filter(record => record.valid);
     const sets = lifting.reduce((sum, record) => sum + record.sets, 0), volume = lifting.reduce((sum, record) => sum + record.volume, 0);
-    const km = day.runs.reduce((sum, run) => sum + (run.distance || 0), 0);
-    const meta = [lifting.length ? `${fmt(sets, 0)} 组 · ${fmt(volume, 0)} kg` : '', day.runs.length ? `跑步 ${fmt(km)} km` : ''].filter(Boolean).join(' · ');
+    const meta = [lifting.length ? `${fmt(sets, 0)} 组 · ${fmt(volume, 0)} kg` : '', day.cardio.length ? `有氧 ${day.cardio.length} 次` : ''].filter(Boolean).join(' · ');
     const year = day.date && day.date.slice(0, 4) !== localToday().slice(0, 4) ? ` · ${day.date.slice(0, 4)}` : '';
     const title = day.date ? `${monthDay(day.date)}<span>${weekday(day.date)}${year}</span>` : '日期待确认';
-    return `<article class="day" id="day-${day.date || 'undated'}"><div class="day-head"><div class="day-date">${title}</div><div class="day-meta">${meta}</div></div>${LIFTS.map(lift => liftGroup(lift, day.lifts[lift.key])).join('')}${runGroup(day.runs)}</article>`;
+    return `<article class="day" id="day-${day.date || 'undated'}"><div class="day-head"><div class="day-date">${title}</div><div class="day-meta">${meta}</div></div>${LIFTS.map(lift => liftGroup(lift, day.lifts[lift.key])).join('')}${cardioGroup(day.cardio)}</article>`;
   }
   function renderLog() {
     const days = logDays(), shown = days.slice(0, state.logDays);
@@ -499,8 +509,8 @@
   }
 
   function renderQuality() {
-    const invalid = state.records.filter(record => !record.valid).length + state.runs.filter(run => !run.valid).length;
-    const undated = state.records.filter(record => !record.date).length + state.runs.filter(run => !run.date).length;
+    const invalid = state.records.filter(record => !record.valid).length + state.cardio.filter(session => !session.valid).length;
+    const undated = state.records.filter(record => !record.date).length + state.cardio.filter(session => !session.date).length;
     const parts = [];
     if (state.dateCorrections.length) parts.push(`${state.dateCorrections.length} 处历史日期已按记录顺序校正`);
     if (invalid) parts.push(`${invalid} 行数值不完整，未计入统计`);
@@ -559,7 +569,7 @@
   async function loadBuffer(buffer, source) { loadData(await window.PowerLogXlsx.readWorkbook(buffer), source); }
   function loadData(workbook, source) {
     Object.assign(state, {
-      records: workbook.records, runs: workbook.runs || [], warnings: workbook.warnings, dateCorrections: workbook.dateCorrections || [],
+      records: workbook.records, cardio: workbook.cardio || [], warnings: workbook.warnings, dateCorrections: workbook.dateCorrections || [],
       loaded: true, source, readAt: new Date(), generatedAt: workbook.generatedAt || null, trendIndex: null, calendarDate: null, runWeek: null, logDays: 10
     });
     setNotice(source === 'file' ? '已读取所选文件。Excel 更新后，需要重新选择文件。' : '');
@@ -592,7 +602,7 @@
         const response = await fetch(new URL('training-data.json', window.location.href), { cache: 'no-store' });
         if (!response.ok) throw new Error(`训练数据未能加载（HTTP ${response.status}），请稍后刷新。`);
         const workbook = await response.json();
-        if (workbook.schemaVersion !== 1 || !Array.isArray(workbook.records) || !Array.isArray(workbook.sheets) || !Array.isArray(workbook.warnings) || (workbook.runs != null && !Array.isArray(workbook.runs)) || !Number.isFinite(Date.parse(workbook.generatedAt))) throw new Error('训练数据格式无效，请重新发布页面。');
+        if (workbook.schemaVersion !== 2 || !Array.isArray(workbook.records) || !Array.isArray(workbook.sheets) || !Array.isArray(workbook.warnings) || (workbook.cardio != null && !Array.isArray(workbook.cardio)) || !Number.isFinite(Date.parse(workbook.generatedAt))) throw new Error('训练数据格式无效，请重新发布页面。');
         loadData(workbook, 'snapshot');
         state.handle = null;
         return;
@@ -700,7 +710,7 @@
   });
 
   if (snapshotMode) {
-    $('chat-tip-text').innerHTML = '练完把训练发到 PowerLog 聊天，比如 <code>10.12 深蹲 160*5*3@8</code> 或 <code>10.12 跑步 10km 52:30</code>。助手写入 Excel 并重新发布后，点右上角刷新。';
+    $('chat-tip-text').innerHTML = '练完把训练发到 PowerLog 聊天，比如 <code>10.12 深蹲 160*5*3@8</code> 或 <code>10.12 跑步 10km 52:30</code>、<code>爬楼机 400 大卡</code>。助手写入 Excel 并重新发布后，点右上角刷新。';
   } else $('import').hidden = false;
   render();
   if (fileMode) {

@@ -6,7 +6,7 @@ import test from 'node:test';
 
 const source = await readFile(new URL('../web/xlsx-reader.js', import.meta.url), 'utf8');
 vm.runInThisContext(source);
-const { parseDate, inferDateSequence, recordsFromRows, runsFromRows, unzip } = globalThis.PowerLogXlsx;
+const { parseDate, inferDateSequence, recordsFromRows, cardioFromRows, unzip } = globalThis.PowerLogXlsx;
 
 test('dates: ISO, both Excel epochs, leap-day bug, ambiguous strings and anomalous years', () => {
   assert.equal(parseDate(45660).date, '2025-01-03');
@@ -128,23 +128,27 @@ test('accessory movements are flagged; barbell variants are not', () => {
   assert.deepEqual(records.filter(record => record.accessory).map(record => record.exercise), names.slice(0, 6));
 });
 
-test('runs: distance, Excel or text times, pace and data issues', () => {
-  const { runs, warnings } = runsFromRows([
-    { row: 1, values: ['RUNNING', '', '', '', '', '', '', ''] },
-    { row: 2, values: ['Date', 'Distance (km)', 'Time', 'Notes', '', '', '', ''] },
-    { row: 3, values: [serial('2026-09-11'), 12, '', '', '', '', '', ''] },
-    { row: 4, values: [serial('2026-09-12'), 10, (50 * 60) / 86400, 'tempo', '', '', '', ''] },
-    { row: 5, values: ['2026-09-13', 21.1, '1:45:30', '', '', '', '', ''] },
-    { row: 6, values: ['2026-09-14', '', '30:00', '', '', '', '', ''] },
-    { row: 7, values: ['2026-09-15', 5, 'soon', '', '', '', '', ''] }
+test('cardio: activities, distance, Excel or text times, calories, pace and data issues', () => {
+  const { cardio, warnings } = cardioFromRows([
+    { row: 1, values: ['CARDIO', '', '', '', '', '', '', ''] },
+    { row: 2, values: ['Date', 'Activity', 'Distance (km)', 'Time', 'Calories (kcal)', 'Notes', '', ''] },
+    { row: 3, values: [serial('2026-09-11'), 'Run', 12, '', '', '', '', ''] },
+    { row: 4, values: [serial('2026-09-12'), 'running', 10, (50 * 60) / 86400, '', 'tempo', '', ''] },
+    { row: 5, values: ['2026-09-13', 'Run', 21.1, '1:45:30', '', '', '', ''] },
+    { row: 6, values: ['2026-09-14', 'Stair Climber', '', '', 400, '', '', ''] },
+    { row: 7, values: ['2026-09-15', 'Run', 5, 'soon', '', '', '', ''] },
+    { row: 8, values: ['2026-09-16', 'Bike', '', '', '', '', '', ''] },
+    { row: 9, values: ['2026-09-17', '', 5, '', '', '', '', ''] }
   ], false);
-  assert.equal(runs.length, 5);
-  assert.deepEqual([runs[0].date, runs[0].distance, runs[0].seconds, runs[0].pace], ['2026-09-11', 12, null, null]);
-  assert.deepEqual([runs[1].seconds, runs[1].pace, runs[1].note], [3000, 300, 'tempo']);
-  assert.equal(runs[2].seconds, 6330);
-  assert.equal(runs[3].valid, false);
-  assert.match(runs[4].issues.join(), /用时格式无效/);
-  assert.equal(warnings.length, 2);
+  assert.equal(cardio.length, 7);
+  assert.deepEqual([cardio[0].date, cardio[0].activity, cardio[0].run, cardio[0].distance, cardio[0].seconds, cardio[0].pace], ['2026-09-11', 'Run', true, 12, null, null]);
+  assert.deepEqual([cardio[1].run, cardio[1].seconds, cardio[1].pace, cardio[1].note], [true, 3000, 300, 'tempo']);
+  assert.equal(cardio[2].seconds, 6330);
+  assert.deepEqual([cardio[3].run, cardio[3].distance, cardio[3].calories, cardio[3].valid], [false, null, 400, true]);
+  assert.match(cardio[4].issues.join(), /用时格式无效/);
+  assert.equal(cardio[5].valid, false);
+  assert.match(cardio[6].issues.join(), /缺少项目/);
+  assert.equal(warnings.length, 3);
 });
 
 test('single-rep work uses actual weight and overflowing metrics are excluded', () => {

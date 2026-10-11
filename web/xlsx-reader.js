@@ -12,8 +12,9 @@
   // Accessory movements (dumbbells, bodyweight, unilateral or overhead work) use loads that are not
   // comparable with the barbell lift, so they also stay out of best weight and estimated 1RM.
   const ACCESSORY = /\bdumbbells?\b|\bdb\b|\bpush-?ups?\b|\bbodyweight\b|\bsplit squats?\b|\boverhead press\b|\bshoulder press\b/i;
-  // Runs live in their own sheet: A date, B distance km, C time, D notes.
-  const RUN_SHEET = 'Running';
+  // Cardio lives in its own sheet: A date, B activity, C distance km, D time, E calories kcal, F notes.
+  const CARDIO_SHEET = 'Cardio';
+  const isRun = activity => /^run(ning)?$/i.test(String(activity ?? '').trim());
   function fail(message) { throw new Error(message); }
   const nodes = (element, name) => Array.from(element.getElementsByTagNameNS('*', name));
   const textAt = (element, name) => nodes(element, name)[0]?.textContent ?? '';
@@ -311,7 +312,7 @@
     return { records, warnings, dateCorrections: inferred.dateCorrections.map(correction => ({ sheet, ...correction })) };
   }
 
-  // A run's time: an Excel time value (fraction of a day) or text such as 45:10 or 1:02:30.
+  // A session's time: an Excel time value (fraction of a day) or text such as 45:10 or 1:02:30.
   function durationSeconds(value) {
     if (typeof value === 'number') return Number.isFinite(value) && value > 0 && value < 1 ? Math.round(value * 86400) : null;
     const text = String(value ?? '').trim();
@@ -321,27 +322,32 @@
     return null;
   }
 
-  function runsFromRows(rows, date1904 = false) {
-    const runs = [], warnings = [];
+  function cardioFromRows(rows, date1904 = false) {
+    const cardio = [], warnings = [];
     for (const { row, values } of rows) {
-      if (row <= 2 || !values.slice(0, 4).some(value => value !== '' && value != null)) continue;
-      const [dateRaw, distanceRaw, timeRaw, note] = values;
+      if (row <= 2 || !values.slice(0, 6).some(value => value !== '' && value != null)) continue;
+      const [dateRaw, activityRaw, distanceRaw, timeRaw, caloriesRaw, note] = values;
       const parsed = parseDate(dateRaw, date1904);
-      const distance = numeric(distanceRaw);
-      const valid = distance != null && distance > 0;
-      const hasTime = timeRaw !== '' && timeRaw != null;
-      const seconds = hasTime ? durationSeconds(timeRaw) : null;
+      const activity = String(activityRaw ?? '').trim();
+      const blank = value => value === '' || value == null;
+      const distance = numeric(distanceRaw), calories = numeric(caloriesRaw);
+      const seconds = blank(timeRaw) ? null : durationSeconds(timeRaw);
       const issues = [];
-      if (!valid) issues.push('距离缺失或无效');
+      if (!activity) issues.push('缺少项目');
+      if (!blank(distanceRaw) && !(distance > 0)) issues.push('距离无效');
+      if (!blank(timeRaw) && seconds == null) issues.push('用时格式无效');
+      if (!blank(caloriesRaw) && !(calories > 0)) issues.push('热量无效');
+      if (blank(distanceRaw) && blank(timeRaw) && blank(caloriesRaw)) issues.push('距离、用时、热量都没有填');
       if (parsed.reason) issues.push(parsed.reason);
-      if (hasTime && seconds == null) issues.push('用时格式无效');
-      runs.push({
-        id: `${RUN_SHEET}:${row}`, row, sheet: RUN_SHEET, date: parsed.date, dateRaw: String(dateRaw ?? ''),
-        distance: valid ? distance : null, seconds, pace: valid && seconds ? seconds / distance : null, note: String(note ?? ''), valid, issues
+      const valid = !issues.length || (issues.length === 1 && parsed.reason === issues[0]);
+      const km = distance > 0 ? distance : null;
+      cardio.push({
+        id: `${CARDIO_SHEET}:${row}`, row, sheet: CARDIO_SHEET, date: parsed.date, dateRaw: String(dateRaw ?? ''), activity, run: isRun(activity),
+        distance: km, seconds, pace: km && seconds ? seconds / km : null, calories: calories > 0 ? calories : null, note: String(note ?? ''), valid, issues
       });
-      if (issues.length) warnings.push({ sheet: RUN_SHEET, row, message: issues.join('；') });
+      if (issues.length) warnings.push({ sheet: CARDIO_SHEET, row, message: issues.join('；') });
     }
-    return { runs, warnings };
+    return { cardio, warnings };
   }
 
   function sheetRows(document, strings, numberFormats = []) {
@@ -405,17 +411,17 @@
       if (formats) numberFormats = nodes(formats, 'xf').map(format => customFormats.get(Number(format.getAttribute('numFmtId'))) || '');
     }
     const date1904 = ['1', 'true'].includes(nodes(workbook, 'workbookPr')[0]?.getAttribute('date1904'));
-    const records = [], runs = [], warnings = [], sheets = [], dateCorrections = [];
+    const records = [], cardio = [], warnings = [], sheets = [], dateCorrections = [];
     for (const sheet of nodes(workbook, 'sheet')) {
       const name = sheet.getAttribute('name');
-      if (!lifts[name] && name !== RUN_SHEET) continue;
+      if (!lifts[name] && name !== CARDIO_SHEET) continue;
       const id = sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || sheet.getAttribute('r:id');
       const relation = rels.get(id);
       if (!relation) fail(`工作表 ${name} 缺少文件关系。`);
       const rows = sheetRows(xml(await zip.read(relation.path)), strings, numberFormats);
-      if (name === RUN_SHEET) {
-        const result = runsFromRows(rows, date1904);
-        runs.push(...result.runs);
+      if (name === CARDIO_SHEET) {
+        const result = cardioFromRows(rows, date1904);
+        cardio.push(...result.cardio);
         warnings.push(...result.warnings);
         continue;
       }
@@ -427,7 +433,7 @@
     }
     if (!sheets.length) fail('没有找到力量举工作表。请使用包含 2025-S、2025-B、2025-D 的训练工作簿。');
     for (const name of Object.keys(lifts)) if (!sheets.includes(name)) warnings.push({ sheet: name, row: null, message: '未找到此工作表' });
-    return { records, runs, warnings, sheets, date1904, dateCorrections };
+    return { records, cardio, warnings, sheets, date1904, dateCorrections };
   }
-  root.PowerLogXlsx = Object.freeze({ readWorkbook, parseDate, inferDateSequence, recordsFromRows, runsFromRows, isoNumberFormat, unzip });
+  root.PowerLogXlsx = Object.freeze({ readWorkbook, parseDate, inferDateSequence, recordsFromRows, cardioFromRows, isoNumberFormat, unzip });
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f3f4f6" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#121315" media="(prefers-color-scheme: dark)">
-  <meta name="description" content="PowerLog：力量举和跑步训练记录。">
+  <meta name="description" content="PowerLog：力量举和有氧训练记录。">
   <title>PowerLog</title>
   <link rel="stylesheet" href="web/styles.css">
   <script defer src="web/xlsx-reader.js"></script>
@@ -84,15 +84,15 @@
         <p class="caption" id="calendar-caption">点一下格子，查看那天练了什么</p>
         <div class="stats" id="calendar-stats"></div>
         <div class="calendar-scroll" id="calendar-scroll"><div id="calendar" class="calendar" tabindex="0" role="group" aria-label="训练日历。用方向键切换日期。"></div></div>
-        <div class="legend" aria-hidden="true"><span>少</span><span class="swatch h0"></span><span class="swatch h1"></span><span class="swatch h2"></span><span class="swatch h3"></span><span class="swatch h4"></span><span>多 · 按力量训练组数</span><span><i class="swatch run"></i>跑步</span></div>
+        <div class="legend" aria-hidden="true"><span>少</span><span class="swatch h0"></span><span class="swatch h1"></span><span class="swatch h2"></span><span class="swatch h3"></span><span class="swatch h4"></span><span>多 · 按力量训练组数</span><span><i class="swatch run"></i>有氧</span></div>
         <div id="day-readout" class="readout" aria-live="polite" hidden></div>
       </section>
 
       <section id="running" class="card" aria-labelledby="running-title">
-        <h2 id="running-title">跑步</h2>
+        <h2 id="running-title">有氧</h2>
         <p class="caption" id="running-caption">每周里程，周一为一周开始</p>
         <div class="stats four" id="running-stats"></div>
-        <div id="run-chart" class="chart" tabindex="0" role="group" aria-label="每周跑步里程。点击柱子或用左右方向键查看每周。"></div>
+        <div id="run-chart" class="chart" tabindex="0" role="group" aria-label="每周跑步里程和其他有氧。点击柱子或用左右方向键查看每周。"></div>
         <div id="run-readout" class="readout" aria-live="polite" hidden></div>
       </section>
     </div>
@@ -114,7 +114,7 @@
       <ul id="quality-list"></ul>
     </details>
 
-    <p class="chat-tip"><svg><use href="#i-chat"/></svg><span id="chat-tip-text">练完把训练发到 PowerLog 聊天，比如 <code>10.12 深蹲 160*5*3@8</code> 或 <code>10.12 跑步 10km 52:30</code>，助手写入 Excel 后在这里刷新。</span></p>
+    <p class="chat-tip"><svg><use href="#i-chat"/></svg><span id="chat-tip-text">练完把训练发到 PowerLog 聊天，比如 <code>10.12 深蹲 160*5*3@8</code> 或 <code>10.12 跑步 10km 52:30</code>、<code>爬楼机 400 大卡</code>，助手写入 Excel 后在这里刷新。</span></p>
   </main>
   <footer class="page-footer" id="footer-text">数据只在这台电脑的浏览器里读取，不上传。</footer>
 </body>
