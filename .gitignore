@@ -201,6 +201,14 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Local training data and generated runtime files
+.powerlog/
+.powerlog-runtime/
+*.powerlog.lock
+.powerlog-*.xlsx
+node_modules/
+HylPowerliftingTraining.xlsx
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

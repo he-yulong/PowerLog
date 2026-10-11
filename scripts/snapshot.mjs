@@ -1,0 +1,56 @@
+// Shared by the read-only website builds. Reads the workbook; never writes it or uses the network.
+import { readFile, writeFile, mkdir, copyFile, readdir } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+
+export const root = fileURLToPath(new URL('../', import.meta.url));
+
+export async function buildSnapshot(python) {
+  const input = spawnSync(python, ['-m', 'powerlog.export', path.join(root, 'HylPowerliftingTraining.xlsx')], { cwd: root, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+  if (input.status !== 0) throw new Error(input.stderr || input.error?.message || 'Excel 导出失败');
+  const raw = JSON.parse(input.stdout);
+  vm.runInThisContext(await readFile(path.join(root, 'web/xlsx-reader.js'), 'utf8'));
+  const snapshot = { schemaVersion: 1, generatedAt: new Date().toISOString(), sourceSha256: raw.sourceSha256, date1904: raw.date1904, records: [], warnings: [], sheets: [], dateCorrections: [] };
+  for (const sheet of raw.sheets) {
+    const result = globalThis.PowerLogXlsx.recordsFromRows(sheet.rows, sheet.name, raw.date1904);
+    snapshot.records.push(...result.records);
+    snapshot.warnings.push(...result.warnings);
+    snapshot.dateCorrections.push(...result.dateCorrections);
+    snapshot.sheets.push(sheet.name);
+  }
+  if (!snapshot.records.length) throw new Error('没有训练记录，停止发布空白数据。');
+  return snapshot;
+}
+
+// index.html switched to the published snapshot, with wording for a private hosted copy.
+export async function snapshotHtml() {
+  const html = await readFile(path.join(root, 'index.html'), 'utf8');
+  return html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n  <meta name="powerlog-data-source" content="snapshot">')
+    .replace('你的数据，留在本地<small>Excel 驱动 · 无需账号</small>', '你的私人训练空间<small>Excel 驱动 · 仅本人访问</small>')
+    .replace('>本地工作簿</span>', '>私人网页副本</span>')
+    .replace('正在读取本地训练记录…', '正在加载已发布的训练记录…')
+    .replace('更新 Excel 后在这里刷新。', '由助手更新 Excel 并重新发布后，在这里刷新查看。电脑需在线才能完成聊天录入。')
+    .replace('数据仅在此浏览器读取 · 不上传', '私人静态页面 · 数据以最近一次发布为准');
+}
+
+export async function writeSite(directory, snapshot, html, page = 'index.html') {
+  await mkdir(path.join(directory, 'web'), { recursive: true });
+  await writeFile(path.join(directory, page), html);
+  for (const file of ['app.js', 'styles.css', 'xlsx-reader.js']) await copyFile(path.join(root, 'web', file), path.join(directory, 'web', file));
+  await writeFile(path.join(directory, 'training-data.json'), JSON.stringify(snapshot));
+  await checkAssets(directory);
+}
+
+// Never include the source workbook or backup directories in a deployment.
+async function checkAssets(directory) {
+  for (const item of await readdir(directory, { withFileTypes: true })) {
+    if (item.isSymbolicLink() || /\.xlsx?$|^\.powerlog$/i.test(item.name)) throw new Error(`不允许发布的文件：${item.name}`);
+    if (item.isDirectory()) await checkAssets(path.join(directory, item.name));
+  }
+}
+
+export function summary(snapshot, extra = {}) {
+  return JSON.stringify({ ...extra, records: snapshot.records.length, dateCorrections: snapshot.dateCorrections.length, generatedAt: snapshot.generatedAt, sourceSha256: snapshot.sourceSha256, latest: Object.fromEntries(snapshot.sheets.map(sheet => [sheet, snapshot.records.filter(r => r.sheet === sheet && r.date).map(r => r.date).sort().at(-1)])) });
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f6f5f0">
+  <meta name="description" content="PowerLog，本地优先的力量举训练记录与可视化。">
+  <title>PowerLog · 力量有迹可循</title>
+  <link rel="stylesheet" href="web/styles.css">
+  <script defer src="web/xlsx-reader.js"></script>
+  <script defer src="web/app.js"></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-bars" viewBox="0 0 24 24"><path d="M3 9v6m4-9v12m10-12v12m4-9v6M7 12h10"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-10m-6 0h6v6"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 3h14v18H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm0 14h14M8 7h7M8 11h5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7a9 9 0 1 0 1 9M20 3v5h-5"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8m-8 4h8"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  </svg>
+
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="PowerLog 首页"><span class="brand-mark"><svg><use href="#i-bars"/></svg></span><span>PowerLog<span class="brand-dot">.</span></span></a>
+    <div class="workspace-label">个人训练空间</div>
+    <nav aria-label="主导航">
+      <a class="nav-link active" href="#overview"><svg><use href="#i-grid"/></svg>训练概览<span class="nav-dot"></span></a>
+      <a class="nav-link" href="#progress"><svg><use href="#i-trend"/></svg>力量趋势</a>
+      <a class="nav-link" href="#history"><svg><use href="#i-book"/></svg>训练日志</a>
+    </nav>
+    <div class="sidebar-note"><span class="tiny-label">ONE REP AT A TIME</span><p>每一次举起，<br>都有迹可循。</p><div class="plate-art" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div></div>
+    <div class="local-badge"><span class="status-dot"></span><div>你的数据，留在本地<small>Excel 驱动 · 无需账号</small></div></div>
+    <div class="sidebar-footer"><span class="avatar">H</span><div>HYL 的训练日志<small>POWERLIFTING JOURNAL</small></div></div>
+  </aside>
+
+  <main id="overview">
+    <header class="topbar"><div class="breadcrumb">我的空间 <span>/</span> <strong>训练概览</strong></div><span class="topbar-tag"><span class="status-dot"></span>本地工作簿</span></header>
+    <section class="page-heading"><div><div class="eyebrow"><span></span> THE WORK ADDS UP</div><h1>力量，来自每一次积累<span>。</span></h1><p>回看每组训练，看见一点一滴的进步。</p></div><div class="heading-actions"><button id="refresh" class="button secondary" type="button"><svg><use href="#i-refresh"/></svg>刷新数据</button><button id="import" class="button primary" type="button"><svg><use href="#i-upload"/></svg>选择工作簿</button><input id="file-input" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></div></section>
+
+    <section class="source-bar" aria-label="数据来源"><div class="file-symbol"><svg><use href="#i-file"/></svg></div><div class="source-description"><strong id="source-name">HylPowerliftingTraining.xlsx</strong><span id="source-detail">正在读取本地训练记录…</span></div><span id="source-status" class="source-pill">等待读取</span></section>
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section class="overview-section" aria-labelledby="overview-title"><div class="section-heading"><h2 id="overview-title">三大项 · 训练概览</h2><span class="subtle-label">全部已载入记录 · 含变式动作</span></div><div id="metric-cards" class="metric-grid"></div></section>
+
+    <div class="main-grid">
+      <section id="progress" class="panel trend-panel" aria-labelledby="trend-title"><div class="panel-heading"><div><div class="eyebrow muted">PROGRESS, NOT PERFECTION</div><h2 id="trend-title">看看你走了多远</h2></div><select id="chart-metric" aria-label="趋势指标"><option value="weight">最高训练重量</option><option value="e1rm">估算 1RM · Epley</option><option value="volume">每日训练量</option></select></div><div class="chart-toolbar"><div class="segmented" aria-label="选择训练项目"><button type="button" data-lift="squat" class="selected" aria-pressed="true">深蹲</button><button type="button" data-lift="bench" aria-pressed="false">卧推</button><button type="button" data-lift="deadlift" aria-pressed="false">硬拉</button></div><div class="range-select"><label class="sr-only" for="range">日期范围</label><select id="range"><option value="all">全部时间</option><option value="90">最近 90 天</option><option value="30">最近 30 天</option><option value="custom">自定义日期</option></select></div></div><div id="custom-dates" class="custom-dates" hidden><label>开始日期<input id="date-start" type="date"></label><span>—</span><label>结束日期<input id="date-end" type="date"></label></div><div class="chart-summary"><span id="chart-value">—<small> kg</small></span><div><strong id="chart-value-label">期间最高训练重量</strong><span id="chart-subtitle">载入记录，开始回顾训练</span></div></div><div id="chart" class="chart" aria-live="polite"></div><p id="chart-note" class="chart-note">每日取最高工作组重量；包含全程变式，不含 Pin Squat (high) 等半程动作，不代表比赛成绩。</p></section>
+
+      <aside class="panel rhythm-panel" aria-labelledby="rhythm-title"><div class="eyebrow muted">SHOW UP. GET STRONGER.</div><h2 id="rhythm-title">把坚持变成习惯</h2><div class="rhythm-number"><strong id="session-count">—</strong><span>个训练日</span></div><p class="rhythm-description" id="rhythm-period">你所选日期范围内的训练足迹</p><div id="activity" class="activity-grid" aria-label="最近十二周训练活动"></div><div class="activity-legend"><span>近 12 周 · 截至最新记录</span><div>少 <i></i><i></i><i></i> 多</div></div><div class="rhythm-bottom"><div><span>累计训练量</span><strong id="total-volume">—<small> t</small></strong></div><div><span>有效工作组</span><strong id="total-sets">—<small> 组</small></strong></div></div><div class="consistency-note"><svg><use href="#i-check"/></svg><span>不急于一时，专注下一组。</span></div></aside>
+    </div>
+
+    <section id="history" class="panel history-panel" aria-labelledby="history-title"><div class="panel-heading"><div><div class="eyebrow muted">THE TRAINING LOG</div><h2 id="history-title">每一组，都算数</h2></div><div class="history-actions"><span id="record-count">0 条记录</span><label class="sr-only" for="record-lift">筛选训练记录项目</label><select id="record-lift"><option value="all">全部项目</option><option value="squat">深蹲</option><option value="bench">卧推</option><option value="deadlift">硬拉</option></select></div></div><div class="table-container"><table><thead><tr><th scope="col">训练日期</th><th scope="col">项目 / 动作</th><th scope="col">重量</th><th scope="col">次数 × 组数</th><th scope="col">RPE</th><th scope="col">训练量</th><th scope="col">备注</th></tr></thead><tbody id="records"></tbody></table></div><div class="table-footer"><span id="table-description">原始记录来自你的 Excel 工作簿</span><button id="show-more" class="text-button" type="button" hidden>查看更多记录<svg><use href="#i-arrow"/></svg></button></div></section>
+
+    <details id="data-quality" class="quality-details" hidden><summary><span class="quality-dot"></span><span id="quality-summary"></span><span class="quality-toggle">查看详情 ＋</span></summary><p>历史记录按由旧到新的顺序核对日期，兼容日/月/年文本。日月倒置或年份笔误仅在前后记录能确定唯一日期时校正；无法确定的日期保留待确认。此处调整用于页面统计，原 Excel 文件保持原样。</p><div id="date-corrections" hidden><h3>历史日期校正明细</h3><ul id="date-correction-list"></ul></div><ul id="quality-list"></ul></details>
+
+    <section class="chat-tip"><div class="tip-icon"><svg><use href="#i-bars"/></svg></div><div><h3>练完，发一句话就好。</h3><p>在 PowerLog 项目聊天中输入 <code>今天深蹲 160kg，5 次 × 3 组，RPE 8</code>，更新 Excel 后在这里刷新。</p></div><span class="chat-tag">CHAT → EXCEL → PROGRESS</span></section>
+    <footer class="page-footer"><span>POWERLOG <span class="footer-separator">/</span> BUILT FOR THE LONG GAME.</span><span>数据仅在此浏览器读取 · 不上传</span></footer>
+  </main>
+</body>
+</html>
