@@ -40,7 +40,7 @@
 - 测试：`python -m unittest discover -s tests -v`。写入测试只能针对临时副本，不向正式表写示例。
 - 工作簿、`.powerlog/` 备份及运行时依赖不提交Git。
 
-## 手机访问与发布
+## 手机访问与发布（Codex，Claude Code 不再维护）
 
 - 私人页面：https://hyl-powerlog.heyulong333.chatgpt.site 。仅本人账号访问，不擅自改为公开或组织共享。
 - 已有 Site ID：`appgprj_6ac30c749bdc8191862d8549396e177f`。部署目录为 `.powerlog-runtime/mobile-site/`，标识保存在其中的 `.openai/hosting.json`；静态目录为 `out`。复用此 Site，不能重复创建。目录丢失时根据该 ID 恢复源代码。
@@ -55,7 +55,7 @@
 - 用户要求在 Claude 手机 App 里查看，已授权把同一份只读副本发布成本人私有的 claude.ai Artifact：https://claude.ai/artifact/Rh5aD9FB51ej1SPZdnZ6is 。保持私有，不改共享设置，也不要另外新建 Artifact。
 - 构建：`node scripts/build-artifact.mjs <python解释器路径> [输出目录]`，默认输出到 `.powerlog-runtime/artifact/`：页面 `powerlog.html`，加上 `web/app.js`、`web/styles.css`、`web/xlsx-reader.js` 和 `training-data.json`。和 `build-mobile.mjs` 共用 `scripts/snapshot.mjs`，只读取 Excel。
 - 在 Claude Code 里成功新增、撤销或更正 Excel 后，重新构建，然后用 Artifact 工具发布到上面的 URL（`url` 填该地址；如果本会话还没读过这个 Artifact，先 read）。页面和上面 4 个文件一起发布，不需要重复询问。
-- Claude Code 没有 Codex Sites 的发布工具，所以无法更新 chatgpt.site 页面。回执里要分别说明：Excel 已保存、Claude Artifact 已更新、chatgpt.site 未更新。
+- 用户 2026-10-12 表示以后不用管 chatgpt.site：在 Claude Code 里只更新 Claude Artifact，回执里只说明 Excel 是否已保存、Artifact 是否已更新，不再提 chatgpt.site。上面“手机访问与发布”一节只适用于 Codex。
 
 ## Git
 
