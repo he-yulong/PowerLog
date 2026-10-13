@@ -453,6 +453,11 @@
   }
   function setChip(record) {
     const weight = record.weight != null ? fmt(record.weight) : escape(record.weightRaw || '?');
+    if (record.failed) {
+      const sets = record.reps && record.sets && record.sets !== 1 ? ` × ${record.sets}` : '';
+      const rpe = record.rpeRaw ? ` · RPE ${escape(record.rpeRaw)}` : '';
+      return `<span class="set plain failed" title="试举失败，不计入最高重量、估算 1RM 和训练量${rpe}">${weight}<small>kg</small> × 失败${sets}</span>`;
+    }
     const reps = record.reps ?? escape(record.repsRaw || '?'), sets = record.sets ?? escape(record.setsRaw || '?');
     const band = rpeBand(record.rpe);
     const rpe = record.rpeRaw ? `<span class="rpe ${band}" title="RPE ${escape(record.rpeRaw)}${band ? ` · ${RPE_LABEL[band]}` : ''}">${escape(record.rpeRaw)}</span>` : '';
@@ -509,7 +514,7 @@
   }
 
   function renderQuality() {
-    const invalid = state.records.filter(record => !record.valid).length + state.cardio.filter(session => !session.valid).length;
+    const invalid = state.records.filter(record => !record.valid && !record.failed).length + state.cardio.filter(session => !session.valid).length;
     const undated = state.records.filter(record => !record.date).length + state.cardio.filter(session => !session.date).length;
     const parts = [];
     if (state.dateCorrections.length) parts.push(`${state.dateCorrections.length} 处历史日期已按记录顺序校正`);

@@ -312,6 +312,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 16px 16px 32px; display: flex
 .sets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .set { display: inline-flex; align-items: center; gap: 6px; padding: 3px 3px 3px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .set.plain { padding-right: 9px; }
+.set.failed { border-style: dashed; border-color: var(--ink-2); background: transparent; }
 .set small { font-weight: 500; color: var(--muted); }
 .rpe { padding: 1px 6px; border-radius: 6px; background: var(--surface-3); font-size: 11px; font-weight: 750; color: var(--ink-2); }
 .rpe.easy { background: var(--rpe-easy-bg); color: var(--rpe-easy); }

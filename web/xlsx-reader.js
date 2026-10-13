@@ -293,15 +293,17 @@
       const calculatedE1rm = reps === 1 ? weight : weight * (1 + reps / 30);
       const valid = weight != null && weight >= 0 && Number.isInteger(reps) && reps > 0 && Number.isInteger(sets) && sets > 0 && Number.isFinite(calculatedVolume) && Number.isFinite(calculatedE1rm);
       const parsedDate = inferred.dates.get(dateAnchor ?? row) || { ...parseDate(dateRaw, date1904), dateOriginal: String(dateRaw ?? ''), dateInferred: false, dateInference: '' };
+      // A failed attempt is written as "failed" in the reps or sets column: a real record, but nothing to count.
+      const failed = !valid && weight != null && weight > 0 && [repsRaw, setsRaw].some(value => /^fail(ed)?$/i.test(String(value ?? '').trim()));
       const issues = [];
-      if (!valid) issues.push('重量 / 次数 / 组数不完整或无效');
+      if (!valid && !failed) issues.push('重量 / 次数 / 组数不完整或无效');
       if (parsedDate.reason) issues.push(parsedDate.reason);
       const record = {
         id: `${sheet}:${row}`, row, sheet, lift: lifts[sheet], date: parsedDate.date,
         dateOriginal: parsedDate.dateOriginal, dateInferred: parsedDate.dateInferred, dateInference: parsedDate.dateInference,
         dateRaw: String(dateRaw ?? ''), exercise: String(exerciseRaw || '未填写动作'), partialRange: PARTIAL_RANGE.test(String(exerciseRaw ?? '')), accessory: ACCESSORY.test(String(exerciseRaw ?? '')),
         weight, reps, sets, weightRaw, repsRaw, setsRaw, manualMax: String(manualMax ?? ''),
-        rpe: numeric(rpeRaw), rpeRaw: String(rpeRaw ?? ''), note: String(note ?? ''), valid,
+        rpe: numeric(rpeRaw), rpeRaw: String(rpeRaw ?? ''), note: String(note ?? ''), valid, failed,
         volume: valid ? calculatedVolume : null,
         e1rm: valid ? calculatedE1rm : null,
         issues

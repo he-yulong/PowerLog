@@ -33,6 +33,7 @@
 - 新增使用真实 Excel 日期及 `yyyy-mm-dd` 格式。
 - `node scripts/plan-date-fixes.mjs <python解释器路径>` 只读：用前端同一套推断，为所有非 `yyyy-mm-dd` 的旧日期生成 `set-dates` 计划；有任何日期无法唯一确定时拒绝输出。2026-10-12 已用这个方法改正全部旧日期。以后如果有人手动在 Excel 里输入了其他格式的日期，可以用同样的方法改成 `yyyy-mm-dd`。
 - 前端的最高训练重量和估算 1RM 包含全程杠铃变式，但不含半程动作，如 Pin Squat (high)（`web/xlsx-reader.js` 的 `PARTIAL_RANGE`），也不含辅助动作：哑铃、自重（Push-ups）、Split Squat、Overhead/Shoulder Press（`ACCESSORY`）。只做了这些动作的日子，在重量和 1RM 趋势图上不画点。训练量和组数仍然包含所有动作。这两条都是用户 2026-10-12 选定的口径。
+- 原表在次数或组数栏写 `failed`/`fail` 的是试举失败（`web/xlsx-reader.js` 的 `failed` 标记）。日志里显示成“150kg × 失败”，不算数据问题，也不计入最高重量、估算 1RM、训练量和组数。用户 2026-10-14 确认这样显示。
 
 ## 运行与验证
 

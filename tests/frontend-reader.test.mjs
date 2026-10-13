@@ -236,3 +236,16 @@ test('real workbook: every date resolves to one date and the verified history da
     }
   }
 });
+
+test('failed attempts are kept as failed, not reported as data problems', () => {
+  const { records, warnings } = recordsFromRows([
+    { row: 3, values: ['2026-09-03', 'Comp Bench', 150, 'fail', '', '', '', ''] },
+    { row: 4, values: ['2026-09-03', 'Comp Bench', 142.5, 'FAILED', 1, '', '', 10] },
+    { row: 5, values: ['2026-09-03', 'Comp Bench', '', 'failed', '', '', '', ''] },
+    { row: 6, values: ['2026-09-03', 'Comp Bench', 140, 'later', '', '', '', ''] },
+    { row: 7, values: ['2026-09-03', 'Comp Bench', 150, 1, 'failed', '', '', ''] }
+  ], '2025-B');
+  assert.deepEqual(records.map(record => [record.failed, record.valid]), [[true, false], [true, false], [false, false], [false, false], [true, false]]);
+  assert.equal(records[0].volume, null);
+  assert.deepEqual(warnings.map(warning => warning.row), [5, 6]);
+});
